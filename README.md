@@ -113,10 +113,14 @@ the same way (`tools/mklz4legacy.py`).
 - Display: `msm_drm.ko` and `focaltech_spi.ko` ship in the vendor ramdisk and
   are copied into the rootfs; `/etc/modules-load.d/flame.conf` loads panel,
   touch, vibrator and battery drivers at boot
-- Waydroid: package installed, but the stock GKI lacks
-  `CONFIG_PID_NS`/`CONFIG_USER_NS`, which LXC (and therefore Waydroid) needs.
-  A custom GKI build of 6.6 with those namespaces enabled and the same KMI
-  would unblock it; do not expect the stock kernel to run containers.
+- Waydroid: package installed, and the stock kernel turns out to support what
+  LXC/Waydroid needs - measured on the running vendor GKI:
+  `unshare -Upirm --fork --map-root-user` succeeds (user/PID/IPC/mount
+  namespaces), `max_user_namespaces` and `max_pid_namespaces` sysctls exist,
+  cgroup v2 is mounted, overlayfs mounts, and `binderfs` is already mounted by
+  Android at `/dev/binderfs`. The rootfs mounts binderfs via `/etc/fstab`.
+  What is still missing is a usable display: without the Adreno 613 driver
+  Waydroid renders in software.
 - Mainline 7.x work that preceded this route is kept in `linux/`, `dts/`,
   `config/` and the older commits; it is not part of the image anymore.
 

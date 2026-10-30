@@ -97,9 +97,11 @@ echo flame > "$DIR/etc/hostname"
 grep -q "127.0.1.1" "$DIR/etc/hosts" || echo "127.0.1.1 flame" >> "$DIR/etc/hosts"
 
 cat > "$DIR/etc/fstab" <<'EOF'
-proc     /proc  proc     defaults               0 0
-sysfs    /sys   sysfs    defaults               0 0
-tmpfs    /tmp   tmpfs    mode=1777,nosuid,nodev 0 0
+proc     /proc        proc     defaults               0 0
+sysfs    /sys         sysfs    defaults               0 0
+tmpfs    /tmp         tmpfs    mode=1777,nosuid,nodev 0 0
+# Waydroid needs /dev/binderfs; the GKI ships CONFIG_ANDROID_BINDERFS=y
+binder   /dev/binderfs binder  nofail                 0 0
 EOF
 
 # the stock GKI kernel has no devtmpfs and no VT: the initramfs hands over a
@@ -189,7 +191,7 @@ flame - Debian 13 (trixie) arm64, Mobian-style Phosh session
   screen: systemctl status phosh     (phoc + /usr/libexec/phosh on msm_drm)
   modules: /lib/modules (stock vendor GKI, copied by the initramfs)
   apps: squeekboard (on-screen keyboard), osmo, nautilus, epiphany
-  Waydroid: waydroid init   (needs network; see README for the GKI caveat)
+  Waydroid: waydroid init -f vd (needs network; binderfs mounts from fstab)
 EOF
 printf 'flame Debian 13 Phosh rootfs for Redmi 14C 5G (flame)\n' > "$DIR/etc/flame-image"
 
