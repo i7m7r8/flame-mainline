@@ -1,41 +1,36 @@
 // SPDX-License-Identifier: BSD-3-Clause
 /*
- * Xiaomi Redmi 12 5G (sky) - Qualcomm SM4450 (ravelin / Snapdragon 4 Gen 2).
+ * Xiaomi Redmi 14C 5G / POCO M7 5G (flame) - Qualcomm SM4450
+ * (ravelin / Snapdragon 4 Gen 2).
  *
- * SKELETON. Generated from ROCKNIX's sm4450-anbernic-rg55g1.dts (same SoC,
- * same reference memory map) with the board specific parts replaced by the
- * values read out of sky's own runtime DT (docs/sky-hw-params.json).
+ * Derived from orange200213/sky-linux sm4450-xiaomi-sky.dts (Redmi 12 5G,
+ * same SoC), itself derived from ROCKNIX sm4450-anbernic-rg55g1.dts.
  *
- * It is meant as the starting point for the first boot, not as a finished
- * board file. Known TODOs:
- *   - memory: sky's /memory node still has to be read back on the device
- *     (/proc/device-tree/memory/reg); the region below is a placeholder that
- *     matches the 4 GB QRD layout this DT came from.
- *   - panel: no driver for xiaomi,m19-36-02-0a yet; timings/DSC come from the
- *     vendor DT. Backlight is a KTD3136 on i2c (no mainline driver).
- *   - touch: Novatek NVT on SPI (downstream driver only), node added at the
- *     bottom of the file.
- *   - regulators: inherited from the RG55G1 file ("live parrot DT"); they must
- *     be diffed against sky's own rails before enabling UFS/display/GPU.
+ * It is the console-first bring-up board file, not a finished one. TODOs:
+ *   - memory: the /memory node below is a placeholder; the bootloader is
+ *     expected to fix it up from SMEM, same as it does for sky.
+ *   - panel: flame uses the 720x1640 "c3f" panel, not sky's 1080x2460
+ *     m19; DSI/panel nodes are inherited from sky and must be replaced with
+ *     timings from the vendor DT (c3f fragment) before enabling mdss.
+ *     Backlight is a KTD3136 on i2c (no mainline driver).
+ *   - touch: focaltech@38 on i2c, not Novatek on SPI; no mainline driver.
+ *   - regulators: inherited from the sky/RG55G1 files; must be diffed
+ *     against flame's vendor DT before enabling UFS/display/GPU.
  *   - anbernic-only peripherals (fan, hall sensor, joypad, RGB LEDs, WCN3950
- *     WiFi/BT) are still present and have to be deleted or disabled.
+ *     nodes inherited from sky) are still present and must be deleted or
+ *     disabled.
+ *   - Wi-Fi/BT: flame is a WCN3990 combo (vendor DT icnss@22800000 with
+ *     WPSS firmware, BT firmware cherokee/crbtfw). Sky's wcn6750 nodes stay
+ *     disabled; the correct mainline driver is chosen in M4 once the
+ *     firmware partition layout is read back.
  *   - UFS inline crypto (ICE) is not described.
  */
 
 // SPDX-License-Identifier: BSD-3-Clause
 /*
- * Anbernic RG 55G1 (SM4450 "ravelinp")
- *
- * Shares the SoC and most of the board design with the Retroid Pocket
- * Classic, so this file follows sm4450-retroid-pocket-classic.dts closely
- * and only diverges where the hardware does.
- *
- * Hardware data recovered from the stock firmware: the RavelinP SG base DTB
- * in vendor_boot.img merged with the Ravelin QRD overlay (board-id
- * <0x1000b 0>) from dtbo.img, cross-checked against lualiliu's RG55G1 tree
- * (https://github.com/lualiliu/RG55G1-linux, branch for-next). The two
- * sources agree on the full joypad GPIO map, the joypad power rails, the
- * volume key and the panel.
+ * Provenance: board data is cross-checked against flame's vendor_boot base
+ * DTB plus its dtbo overlay (msm-id 0x245/0x246, board-id <0x10022 0x08>)
+ * and the sky-linux board file for the shared SM4450 platform.
  */
 
 /dts-v1/;
@@ -67,9 +62,10 @@
 #include "sm4450.dtsi"
 / {
 	model = "Xiaomi Redmi 14C 5G (flame)";
-	compatible = "anbernic,rg55g1", "qcom,sm4450";
-	qcom,msm-id = <0x28d 0x10000>, <0x25a 0x10000>, <0x28e 0x10000>;
-	qcom,board-id = <0x1000b 0>;
+	compatible = "xiaomi,flame", "qcom,sm4450", "qcom,ravelin";
+	/* taken from flame's own dtbo entry (dtb_idx 5) */
+	qcom,msm-id = <0x245 0x10000>, <0x246 0x10000>;
+	qcom,board-id = <0x10022 0x08>;
 
 
 
@@ -1711,7 +1707,7 @@
 		vdd-3.3-ch0-supply = <&vreg_l7e_3>;
 
 
-		status = "disabled"; /* enable with WPSS/ath11k */
+		status = "disabled"; /* flame: WCN3990-class combo behind icnss/WPSS */
 	};
 };
 
@@ -1767,8 +1763,9 @@
 			status = "okay";
 
 			bluetooth: bluetooth {
+				/* flame: WCN3990-class BT (vendor firmware cherokee) */
 				compatible = "qcom,wcn6750-bt";
-				status = "disabled"; /* enable with WPSS/ath11k */
+				status = "disabled"; /* enable in M4 once the combo chip is identified */
 
 				qcom,bt-vdd-io-supply = <&vreg_l21b_1p8>;
 				qcom,bt-vdd-aon-supply = <&vreg_s7b_1p12>;

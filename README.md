@@ -16,7 +16,20 @@ Based on the proven bring-up by [orange200213/sky-linux](https://github.com/oran
 
 - M0 console: build pipeline up; hardware values provisional
 - M1 USB serial: initramfs sets up a CDC-ACM gadget and a root shell on `ttyGS0`
-- M2+ (UFS, display `c3f` panel, focaltech touch, PM7250B charger, WCN6750): TODO
+- M2+ (UFS, display `c3f` panel, focaltech touch, PM7250B charger, WCN3990): TODO
+
+## Confirmed device facts
+
+Read back from the running Android 17 ROM (`getprop`/`dumpsys`):
+
+- SKU `c3fin`, hwversion `1.19.0`, 4 GB RAM, dtb_idx 5 (Android slots, `_a` active)
+- SoC SM4450 ravelin, 4K pages
+- UFS `soc/1d84000.ufshc`, USB `a600000.dwc3`
+- Wi-Fi/BT combo: WCN3990-class (vendor DT `qcom,icnss@22800000` + WPSS
+  firmware; BT firmware "cherokee"); not WCN6750
+- Cameras: truly sc5kjns + sc820cs; side fingerprint: goodix
+- GPU Adreno 613, 340-955 MHz
+- Panel: 720x1640 "c3f"-class (vendor DT splash `0xb8000000 + 0x2b00000`)
 
 ## Flash (boot_a only)
 
