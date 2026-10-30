@@ -67,7 +67,7 @@ chroot "$DIR" /bin/bash -c '
 		openssh-server sudo nano less htop file \
 		network-manager modemmanager ofono \
 		pipewire wireplumber alsa-utils \
-		phosh phoc osmo feedbackd calls \
+		phosh phoc osmo feedbackd phosh-mobile-settings \
 		gsettings-desktop-schemas dconf-cli \
 		nautilus epiphany-browser gnome-system-monitor \
 		weston wayland-utils libgl1-mesa-dri libgles2 mesa-utils \
@@ -173,7 +173,7 @@ flame - Debian 13 (trixie) arm64, Mobian-style Phosh session
   login: root  password: flame
   screen: systemctl status phosh     (phoc + panel via msm_drm)
   modules: /lib/modules (stock vendor GKI, copied by the initramfs)
-  apps: calls (dialer), osmo (keyboard), nautilus, epiphany
+  apps: osmo (keyboard), nautilus, epiphany, phosh-mobile-settings
   Waydroid: waydroid init   (needs network; see README for the GKI caveat)
 EOF
 printf 'flame Debian 13 Phosh rootfs for Redmi 14C 5G (flame)\n' > "$DIR/etc/flame-image"
