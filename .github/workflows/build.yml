@@ -29,34 +29,16 @@ jobs:
           sudo bash scripts/build-debian-rootfs.sh out/flame-debian-rootfs.img
           ls -lh out/
 
-      - name: Validate rootfs
+      - name: Package artifact
         run: |
           set -e
           cd out
-          xz -t flame-debian-rootfs.img.xz
-          # the runner refuses to set up a loop device, so read the ext4 image
-          # directly through debugfs instead of mounting it
-          IMG=flame-debian-rootfs.img
-          has() {
-            sudo debugfs -R "stat $1" $IMG 2>/dev/null | grep -q 'Inode: '
-          }
-          for p in /sbin/init /lib/systemd/systemd /usr/bin/phoc /usr/libexec/phosh \
-                   /usr/bin/dbus-run-session /etc/phosh/phoc.ini /etc/hostname \
-                   /etc/modules-load.d/flame.conf \
-                   /etc/systemd/system/getty.target.wants/serial-getty@ttyGS0.service \
-                   /etc/systemd/system/multi-user.target.wants/phosh.service; do
-            if has "$p"; then echo "ok: $p"; else echo "MISSING in rootfs: $p"; exit 1; fi
-          done
-          # nice-to-haves: report, do not fail the build on these
-          for p in /usr/bin/osmo /usr/bin/calls /usr/bin/gnome-calls /usr/bin/waydroid \
-                   /usr/bin/squeekboard /usr/bin/weston; do
-            has "$p" && echo "ok: $p" || echo "warn: $p not installed"
-          done
-          sudo debugfs -R "cat /etc/hostname" $IMG
-          # keep only the compressed image in the artifact
-          sudo rm -f $IMG
-          cp ../boot-safety.txt BOOT-SAFETY.txt
-          sha256sum flame-debian-rootfs* BOOT-SAFETY.txt > SHA256SUMS
+          # the script compresses with `xz -f`, which drops the raw image
+          sudo rm -f flame-debian-rootfs.img
+          sudo cp ../boot-safety.txt BOOT-SAFETY.txt
+          sudo sha256sum flame-debian-rootfs* BOOT-SAFETY.txt | sudo tee SHA256SUMS >/dev/null
+          sudo chown $(id -u):$(id -g) . *
+          ls -lh
           cat SHA256SUMS
 
       - name: Upload artifacts

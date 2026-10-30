@@ -103,8 +103,9 @@ the same way (`tools/mklz4legacy.py`).
 ## Status
 
 - Boot path: kernel + initramfs + switch_root — built, needs on-device run
-- Debian 13 rootfs: CI build (debootstrap + qemu-user), validated read-only
-  through `debugfs` (runners do not allow loop mounts)
+- Debian 13 rootfs: CI build (debootstrap + qemu-user), artifact = the `.img.xz`
+  plus `SHA256SUMS`; no content validation step (runners cannot loop-mount, and
+  `xz -f` removes the raw image before any check could see it)
 - Mobile UI: `phosh.service` starts `phoc -S -E /usr/libexec/phosh` directly,
   because this kernel has no VT so gdm/gnome-session and the packaged
   `phosh.service` (both need `/dev/tty0` + a VT) cannot be used. It renders
