@@ -65,7 +65,7 @@ chroot "$DIR" /bin/bash -c '
 		systemd-sysv udev dbus dbus-user-session systemd-resolved \
 		iproute2 iputils-ping ca-certificates curl wget gnupg \
 		openssh-server sudo nano less htop file \
-		network-manager modemmanager ofono \
+		network-manager modemmanager \
 		pipewire wireplumber alsa-utils \
 		phosh phoc osmo feedbackd phosh-mobile-settings \
 		gsettings-desktop-schemas dconf-cli \
