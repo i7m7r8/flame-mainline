@@ -29,8 +29,9 @@
 // SPDX-License-Identifier: BSD-3-Clause
 /*
  * Provenance: board data is cross-checked against flame's vendor_boot base
- * DTB plus its dtbo overlay (msm-id 0x245/0x246, board-id <0x10022 0x08>)
- * and the sky-linux board file for the shared SM4450 platform.
+ * DTB ("Ravelin 4Gb SoC") plus its "Flame QRD 4GB DDR" dtbo overlay
+ * (msm-id 0x238, board-id <0x2000b 0x600>) and the sky-linux board file for
+ * the shared SM4450 platform.
  */
 
 /dts-v1/;
@@ -63,9 +64,14 @@
 / {
 	model = "Xiaomi Redmi 14C 5G (flame)";
 	compatible = "xiaomi,flame", "qcom,sm4450", "qcom,ravelin";
-	/* taken from flame's own dtbo entry (dtb_idx 5) */
-	qcom,msm-id = <0x245 0x10000>, <0x246 0x10000>;
-	qcom,board-id = <0x10022 0x08>;
+	/*
+	 * SM4450 "ravelin", 4 GB DDR: base DTB is vendor_boot's "Ravelin 4Gb
+	 * SoC" (msm-id 0x238, board-id <0x00 0x600>), overlaid by the flame
+	 * QRD 4 GB entry (board-id <0x2000b 0x600>). The shim loads this DTB
+	 * directly, so these are informational only.
+	 */
+	qcom,msm-id = <0x238 0x10000>;
+	qcom,board-id = <0x2000b 0x600>;
 
 
 

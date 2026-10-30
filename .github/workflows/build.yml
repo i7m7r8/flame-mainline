@@ -105,6 +105,56 @@ jobs:
           cp out/*.img ../../out/
           ls -la ../../out
 
+      - name: Validate image and write safety notes
+        run: |
+          cd out
+          for img in *.img; do
+            magic=$(head -c 8 "$img")
+            echo "$img magic: $magic"
+            [ "$magic" = "ANDROID!" ] || { echo "bad boot image header"; exit 1; }
+            size=$(stat -c%s "$img")
+            [ "$size" -gt 4000000 ] || { echo "$img is suspiciously small"; exit 1; }
+          done
+          sha256sum * > SHA256SUMS
+          cat > BOOT-SAFETY.txt <<'EOF'
+flame-mainline shim image - safety notes
+========================================
+
+This image only ever goes to the boot_a partition. It does not touch
+boot_b, vbmeta, dtbo, vendor_boot or any bootloader partition, so the
+bootloader itself can never be bricked by flashing it.
+
+Before flashing, back up the current boot image (root shell in Android):
+
+  dd if=/dev/block/by-name/boot_a of=/sdcard/boot_a-stock.img
+  dd if=/dev/block/by-name/boot_b of=/sdcard/boot_b-stock.img
+
+Then copy both to a PC with `adb pull /sdcard/boot_a-stock.img`.
+
+Safest test - no flash at all (works on some bootloaders, not all):
+
+  fastboot boot out/flame-shim-boot-v4.img
+
+If the bootloader says the command is unknown, flash only boot_a:
+
+  fastboot getvar current-slot          # must print a
+  fastboot flash boot_a out/flame-shim-boot-v4.img
+  fastboot reboot
+
+NO auto-reboot on kernel panic is configured (panic timeout 0), so a
+failed boot simply hangs; it will not loop. Hold Power+VolDown/VolUp to
+get back to fastboot or recovery.
+
+Restore Android at any time (LineageOS recovery: Install -> Install
+image -> Boot, or fastboot):
+
+  fastboot flash boot_a boot_a-stock.img
+
+Never flash boot_b with this image: keeping slot b on the stock ROM is
+the built-in fallback if boot_a keeps failing.
+EOF
+          ls -la
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:

@@ -31,16 +31,43 @@ Read back from the running Android 17 ROM (`getprop`/`dumpsys`):
 - GPU Adreno 613, 340-955 MHz
 - Panel: 720x1640 "c3f"-class (vendor DT splash `0xb8000000 + 0x2b00000`)
 
-## Flash (boot_a only)
+## Flash (boot_a only, reversible)
 
-Recovery: flash your stock `boot.img` back to `boot_a`.
+The image never touches `boot_b`, `vbmeta`, `dtbo`, `vendor_boot` or any
+bootloader partition, so it cannot brick the device. Before flashing, back up
+the stock boot images (root shell in Android):
 
 ```sh
+dd if=/dev/block/by-name/boot_a of=/sdcard/boot_a-stock.img
+dd if=/dev/block/by-name/boot_b of=/sdcard/boot_b-stock.img
+```
+
+Try a no-write boot first (works on some bootloaders only):
+
+```sh
+fastboot boot out/flame-shim-boot-v4.img
+```
+
+Otherwise flash slot a only:
+
+```sh
+fastboot getvar current-slot        # must print a
 fastboot flash boot_a out/flame-shim-boot-v4.img
 fastboot reboot
 ```
 
 Watch for a `ttyACM` device on the host, then `picocom -b 115200 /dev/ttyACM0`.
+
+Restore Android at any time - from LineageOS recovery (Install -> Install
+image -> Boot) or fastboot:
+
+```sh
+fastboot flash boot_a boot_a-stock.img
+```
+
+No auto-reboot on panic is configured (`panic` unset = hang), so a failed
+boot will not loop. Keep slot b on the stock ROM: it is the automatic
+fallback if slot a keeps failing.
 
 ## Provisional values (verify from the device)
 
