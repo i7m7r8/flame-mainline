@@ -1,0 +1,116 @@
+name: flame-mainline
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends \
+            build-essential gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu \
+            bc bison flex libssl-dev libelf-dev cpio xz-utils python3 git
+
+      - name: Fetch Linux 7.2.13
+        run: |
+          curl -fsSLO https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-7.2.13.tar.xz
+          tar xf linux-7.2.13.tar.xz
+          mv linux-7.2.13 linux
+          cd linux
+          git init -q .
+          git add -A
+          git -c user.email=ci@flame -c user.name=ci commit -qm baseline
+          echo "KERNEL=$(make -s kernelversion)" >> "$GITHUB_ENV"
+
+      - name: Fetch ROCKNIX SM4450 patches and sky-linux
+        run: |
+          git clone -q --depth 1 --filter=blob:none --sparse https://github.com/ROCKNIX/distribution rooknix
+          git -C rooknix sparse-checkout set projects/ROCKNIX/devices/SM4450/patches
+          git clone -q --depth 1 https://github.com/orange200213/sky-linux sky
+          ls rooknix/projects/ROCKNIX/devices/SM4450/patches/linux | wc -l
+
+      - name: Apply ROCKNIX SM4450 series
+        run: |
+          cd linux
+          SRC=../rooknix/projects/ROCKNIX/devices/SM4450/patches/linux
+          : > ../patch-report.txt
+          for p in $(ls "$SRC"/*.patch | sort); do
+            if git apply --3way "$p" 2>>../patch-report.txt; then
+              echo "APPLIED $(basename "$p")" >> ../patch-report.txt
+            else
+              echo "FAILED  $(basename "$p")" >> ../patch-report.txt
+            fi
+          done
+          grep -c APPLIED ../patch-report.txt || true
+          grep -c FAILED ../patch-report.txt || true
+
+      - name: Apply sky-linux patches
+        run: |
+          cd linux
+          for p in ../sky/kernel/patches/*.patch; do
+            if git apply --3way "$p" 2>>../patch-report.txt; then
+              echo "APPLIED $(basename "$p")" >> ../patch-report.txt
+            else
+              echo "FAILED  $(basename "$p")" >> ../patch-report.txt
+            fi
+          done
+
+      - name: Install flame DTS
+        run: |
+          cp dts/sm4450-xiaomi-flame.dts linux/arch/arm64/boot/dts/qcom/
+          grep -q sm4450-xiaomi-flame linux/arch/arm64/boot/dts/qcom/Makefile || \
+            echo 'dtb-$(CONFIG_ARCH_QCOM) += sm4450-xiaomi-flame.dtb' >> linux/arch/arm64/boot/dts/qcom/Makefile
+
+      - name: Prepare initramfs
+        run: |
+          curl -fsSL -o alpine.tgz https://dl-cdn.alpinelinux.org/alpine/v3.20/releases/aarch64/alpine-minirootfs-3.20.3-aarch64.tar.gz
+          mkdir -p rootfs
+          tar -xzf alpine.tgz -C rootfs
+          mkdir -p initramfs/bin initramfs/lib initramfs/dev initramfs/proc initramfs/sys
+          cp rootfs/bin/busybox initramfs/bin/busybox
+          cp -a rootfs/lib/ld-musl-aarch64.so.1 initramfs/lib/ 2>/dev/null || true
+          cp -a rootfs/lib/libc.musl-aarch64.so.1 initramfs/lib/ 2>/dev/null || true
+          cp initramfs-init initramfs/init
+          chmod +x initramfs/init initramfs/bin/busybox
+          find initramfs -maxdepth 2 | head -20
+
+      - name: Configure
+        run: |
+          cd linux
+          cp ../config/m1.config .config
+          echo 'CONFIG_INITRAMFS_SOURCE="../initramfs"' >> .config
+          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- olddefconfig
+
+      - name: Build Image and DTBs
+        run: |
+          cd linux
+          make -j"$(nproc)" ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- Image dtbs
+
+      - name: Pack shim boot image
+        run: |
+          mkdir -p out
+          cp linux/arch/arm64/boot/Image out/Image
+          cp linux/arch/arm64/boot/dts/qcom/sm4450-xiaomi-flame.dtb out/flame.dtb
+          python3 sky/tools/mklinuxpayload.py out/Image out/flame.dtb out/payload.bin --load 0xc0000000
+          cd sky/shim
+          SHIM_FB_W=720 SHIM_FB_H=1640 ./build-sky.sh ../../out/payload.bin
+          cp out/*.img ../../out/
+          ls -la ../../out
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: flame-mainline-${{ github.sha }}
+          path: |
+            out/
+            patch-report.txt
+            linux/.config
+          if-no-files-found: warn

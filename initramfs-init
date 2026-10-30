@@ -1,0 +1,44 @@
+#!/bin/busybox sh
+# flame-mainline M0/M1 init: mount fs, USB ACM gadget, shell on ttyGS0.
+/bin/busybox --install -s /bin 2>/dev/null
+export PATH=/bin:/sbin
+
+mount -t proc proc /proc 2>/dev/null
+mount -t sysfs sysfs /sys 2>/dev/null
+mount -t devtmpfs devtmpfs /dev 2>/dev/null
+mkdir -p /dev/pts
+mount -t devpts devpts /dev/pts 2>/dev/null
+mount -t configfs configfs /sys/kernel/config 2>/dev/null
+mount -t tmpfs tmpfs /tmp 2>/dev/null
+
+echo "flame-mainline: userspace up" > /dev/console 2>/dev/null
+dmesg > /dev/console 2>/dev/null
+
+G=/sys/kernel/config/usb_gadget/g1
+mkdir -p "$G" 2>/dev/null
+echo 0x18d1 > "$G/idVendor" 2>/dev/null
+echo 0xd001 > "$G/idProduct" 2>/dev/null
+mkdir -p "$G/strings/0x409" 2>/dev/null
+echo flame-mainline > "$G/strings/0x409/serialnumber" 2>/dev/null
+echo xiaomi > "$G/strings/0x409/manufacturer" 2>/dev/null
+echo "flame mainline" > "$G/strings/0x409/product" 2>/dev/null
+mkdir -p "$G/functions/acm.usb0" 2>/dev/null
+mkdir -p "$G/configs/c.1/strings/0x409" 2>/dev/null
+echo acm > "$G/configs/c.1/strings/0x409/configuration" 2>/dev/null
+ln -sf "$G/functions/acm.usb0" "$G/configs/c.1/acm.usb0" 2>/dev/null
+UDC=$(ls /sys/class/udc 2>/dev/null | head -1)
+[ -n "$UDC" ] && echo "$UDC" > "$G/UDC" 2>/dev/null
+
+(
+  i=0
+  while [ ! -e /dev/ttyGS0 ] && [ $i -lt 120 ]; do
+    sleep 1
+    i=$((i+1))
+  done
+  if [ -e /dev/ttyGS0 ]; then
+    exec /bin/sh -c 'exec /bin/sh </dev/ttyGS0 >/dev/ttyGS0 2>&1'
+  fi
+  exec /bin/sh
+) &
+
+while true; do sleep 3600; done
