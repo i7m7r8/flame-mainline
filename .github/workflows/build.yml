@@ -102,7 +102,7 @@ jobs:
           python3 sky/tools/mklinuxpayload.py out/Image out/flame.dtb out/payload.bin --load 0xc0000000
           cd sky/shim
           SHIM_FB_W=720 SHIM_FB_H=1640 ./build-sky.sh ../../out/payload.bin
-          cp out/*.img ../../out/
+          cp out/sky-shim-boot-v4.img ../../out/flame-shim-boot-v4.img
           ls -la ../../out
 
       - name: Validate image and write safety notes
