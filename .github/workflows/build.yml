@@ -44,6 +44,7 @@ jobs:
           if [ -f /mnt/rootfs/root/setup-status.txt ]; then cat /mnt/rootfs/root/setup-status.txt; fi
           sudo umount /mnt/rootfs
           sudo rmdir /mnt/rootfs
+          rm -f flame-debian-rootfs.img
           cp ../boot-safety.txt BOOT-SAFETY.txt
           sha256sum flame-debian-rootfs* BOOT-SAFETY.txt > SHA256SUMS
           cat SHA256SUMS
