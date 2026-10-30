@@ -8,7 +8,7 @@ on:
 jobs:
   build:
     runs-on: ubuntu-24.04
-    timeout-minutes: 150
+    timeout-minutes: 300
     steps:
       - uses: actions/checkout@v4
 
@@ -17,7 +17,8 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y -qq --no-install-recommends \
             build-essential gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu \
-            bc bison flex libssl-dev libelf-dev cpio xz-utils python3 git
+            bc bison flex libssl-dev libelf-dev cpio xz-utils python3 git \
+            debootstrap qemu-user-static binfmt-support e2fsprogs
 
       - name: Fetch Linux 7.2.13
         run: |
@@ -86,6 +87,7 @@ jobs:
         run: |
           cd linux
           cp ../config/m1.config .config
+          cat ../config/waydroid.config >> .config
           echo 'CONFIG_INITRAMFS_SOURCE="../initramfs"' >> .config
           make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- olddefconfig
 
@@ -93,6 +95,12 @@ jobs:
         run: |
           cd linux
           make -j"$(nproc)" ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- Image dtbs
+
+      - name: Build Debian arm64 SD rootfs (Waydroid-ready)
+        run: |
+          sudo update-binfmts --enable qemu-aarch64 || true
+          sudo bash scripts/build-debian-rootfs.sh out/flame-debian-rootfs.img
+          ls -lh out/
 
       - name: Pack shim boot image
         run: |
@@ -115,6 +123,7 @@ jobs:
             size=$(stat -c%s "$img")
             [ "$size" -gt 4000000 ] || { echo "$img is suspiciously small"; exit 1; }
           done
+          xz -t flame-debian-rootfs.img.xz
           cp ../boot-safety.txt BOOT-SAFETY.txt
           sha256sum * > SHA256SUMS
           ls -la
