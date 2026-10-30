@@ -58,12 +58,15 @@ fastboot reboot
 
 Watch for a `ttyACM` device on the host, then `picocom -b 115200 /dev/ttyACM0`.
 
-Restore Android at any time - from LineageOS recovery (Install -> Install
-image -> Boot) or fastboot:
+Restore Android at any time from fastboot (the bootloader is never touched):
 
 ```sh
 fastboot flash boot_a boot_a-stock.img
 ```
+
+While the shim is in `boot_a`, recovery is unreachable (recovery boots the
+kernel from the active slot), so restore via fastboot, not via recovery.
+Confirm `fastboot devices` works on your PC before flashing.
 
 No auto-reboot on panic is configured (`panic` unset = hang), so a failed
 boot will not loop. Keep slot b on the stock ROM: it is the automatic

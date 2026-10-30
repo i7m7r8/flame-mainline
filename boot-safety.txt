@@ -26,13 +26,18 @@ If the bootloader says the command is unknown, flash only boot_a:
   fastboot reboot
 
 No auto-reboot on kernel panic is configured (panic timeout 0), so a
-failed boot simply hangs; it will not loop. Hold Power+VolUp+VolDown to
-get back to fastboot or LineageOS recovery.
+failed boot simply hangs; it will not loop. Hold Power+VolDown to get
+back to fastboot (Power+VolUp for recovery).
 
-Restore Android at any time (LineageOS recovery: Install -> Install
-image -> Boot, or fastboot):
+Restore Android at any time with the backup (fastboot is in the
+bootloader and is never affected by this image):
 
   fastboot flash boot_a boot_a-stock.img
+
+Note: while the shim sits in boot_a, LineageOS recovery is temporarily
+unreachable (recovery boots the kernel from the active boot slot). The
+bootloader/fastboot is not affected, so keep a PC + USB cable handy and
+confirm `fastboot devices` works before flashing.
 
 Never flash boot_b with this image: keeping slot b on the stock ROM is
 the built-in fallback if slot a keeps failing.
