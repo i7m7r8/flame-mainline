@@ -48,7 +48,8 @@ jobs:
             if has "$p"; then echo "ok: $p"; else echo "MISSING in rootfs: $p"; exit 1; fi
           done
           # nice-to-haves: report, do not fail the build on these
-          for p in /usr/bin/osmo /usr/bin/waydroid /usr/bin/squeekboard /usr/bin/weston; do
+          for p in /usr/bin/osmo /usr/bin/calls /usr/bin/gnome-calls /usr/bin/waydroid \
+                   /usr/bin/squeekboard /usr/bin/weston; do
             has "$p" && echo "ok: $p" || echo "warn: $p not installed"
           done
           sudo debugfs -R "cat /etc/hostname" $IMG

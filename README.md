@@ -35,10 +35,11 @@ rootfs on microSD (`LABEL=flame-root`) and `switch_root`s into it.
 - `flame-debian-rootfs.img.xz` — Debian 13 arm64 ext4, built in CI
   (`scripts/build-debian-rootfs.sh`). Mobian-style mobile stack from Debian's
   own packages: `phosh` + `phoc` (compositor), `squeekboard` on-screen
-  keyboard, `osmo`, `feedbackd`, `phosh-mobile-settings`, pipewire,
+  keyboard, `osmo`, `gnome-calls` (dialer) + `callaudiod`, `gnome-contacts`,
+  `feedbackd`, `phosh-mobile-settings`, pipewire,
   NetworkManager, nautilus/epiphany, plus `weston` and `waydroid`.
   root password `flame`
-  (no dialer: `calls` is not in trixie - add later from source or Mobian repo)
+  (the dialer is `gnome-calls`; Debian trixie has no package named `calls`)
 - stock `boot.img`, `vendor_boot.img`, `dtbo.img`, `recovery.img`
 
 ## Flash

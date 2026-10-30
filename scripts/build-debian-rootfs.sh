@@ -1,7 +1,7 @@
 #!/bin/bash
 # Build a Debian 13 (trixie) arm64 mobile rootfs image (LABEL=flame-root) for
-# the Xiaomi Redmi 14C 5G (flame): Mobian-style stack - Phosh/phoc, osmo,
-# squeekboard, feedbackd - plus Weston and Waydroid.
+# the Xiaomi Redmi 14C 5G (flame): Mobian-style stack - Phosh/phoc, gnome-calls,
+# osmo, squeekboard, feedbackd - plus Weston and Waydroid.
 #
 # Runs on an x86_64 host: debootstrap --foreign plus qemu-user-static binfmt
 # execute the arm64 chroot (second stage, apt, waydroid package).
@@ -68,6 +68,7 @@ chroot "$DIR" /bin/bash -c '
 		network-manager modemmanager \
 		pipewire wireplumber alsa-utils \
 		phosh phoc osmo squeekboard feedbackd phosh-mobile-settings \
+		gnome-calls callaudiod gnome-contacts iio-sensor-proxy \
 		gsettings-desktop-schemas dconf-cli slurp \
 		nautilus epiphany-browser gnome-system-monitor \
 		weston wayland-utils libgl1-mesa-dri libgles2 mesa-utils \
