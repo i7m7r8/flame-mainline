@@ -8,3 +8,4 @@ initramfs/bin/
 initramfs/lib/
 initramfs/init
 patch-report.txt
+artifacts/
