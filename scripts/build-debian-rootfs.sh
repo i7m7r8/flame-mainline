@@ -1,6 +1,7 @@
 #!/bin/bash
-# Build a Debian 13 (trixie) arm64 rootfs image (LABEL=flame-root) for the
-# Xiaomi Redmi 14C 5G (flame), with Waydroid + Weston preinstalled.
+# Build a Debian 13 (trixie) arm64 mobile rootfs image (LABEL=flame-root) for
+# the Xiaomi Redmi 14C 5G (flame): Mobian-style stack - Phosh/phoc, osmo,
+# calls, feedbackd - plus Weston and Waydroid.
 #
 # Runs on an x86_64 host: debootstrap --foreign plus qemu-user-static binfmt
 # execute the arm64 chroot (second stage, apt, waydroid package).
@@ -56,14 +57,19 @@ for m in proc sys dev; do
 done
 
 export DEBIAN_FRONTEND=noninteractive
-log "base packages"
+log "base + mobile (Mobian/Phosh) packages"
 chroot "$DIR" /bin/bash -c '
 	set -e
 	apt-get update -qq
 	apt-get install -y -qq --no-install-recommends \
-		systemd-sysv udev dbus dbus-user-session \
+		systemd-sysv udev dbus dbus-user-session systemd-resolved \
 		iproute2 iputils-ping ca-certificates curl wget gnupg \
-		openssh-server sudo nano less htop \
+		openssh-server sudo nano less htop file \
+		network-manager modemmanager ofono \
+		pipewire wireplumber alsa-utils \
+		phosh phoc osmo feedbackd calls \
+		gsettings-desktop-schemas dconf-cli \
+		nautilus epiphany-browser gnome-system-monitor \
 		weston wayland-utils libgl1-mesa-dri libgles2 mesa-utils \
 		lxc python3
 '
@@ -117,15 +123,60 @@ if [ -e "$DIR/usr/lib/systemd/system/waydroid-container.service" ]; then
 		"$DIR/etc/systemd/system/multi-user.target.wants/waydroid-container.service"
 fi
 
+# panel + touch: the vendor modules were copied to /lib/modules by the initramfs
+cat > "$DIR/etc/modules-load.d/flame.conf" <<'EOF'
+msm_drm
+focaltech_spi
+nt36xxx_spi
+spi-msm-geni
+i2c-msm-geni
+msm_geni_serial
+leds-qpnp-vibrator-ldo
+qti_battery_charger_main
+EOF
+
+# No VT in this kernel, so gdm/phosh-session cannot be used: phoc (the wlroots
+# compositor of Phosh) runs as a plain systemd service and grabs DRM master
+# directly as root.
+cat > "$DIR/etc/systemd/system/phosh.service" <<'EOF'
+[Unit]
+Description=Phosh mobile session (phoc)
+After=network.target systemd-modules-load.service
+Wants=systemd-modules-load.service
+
+[Service]
+User=root
+PAMName=
+Environment=XDG_RUNTIME_DIR=/run/user/0
+Environment=XDG_SESSION_TYPE=wayland
+Environment=GALLIUM_DRIVER=llvmpipe
+Environment=WLR_RENDERER=pixman
+Environment=MOZ_ENABLE_WAYLAND=1
+Environment=GTK_BACKEND=wayland
+ExecStartPre=/bin/mkdir -p /run/user/0
+ExecStartPre=/bin/chown -R root:root /run/user/0
+ExecStartPre=/bin/chmod 0700 /run/user/0
+ExecStart=/usr/bin/dbus-run-session -- /usr/bin/phoc
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
+EOF
+ln -sf /etc/systemd/system/phosh.service \
+	"$DIR/etc/systemd/system/multi-user.target.wants/phosh.service"
+
 echo 'root:flame' | chroot "$DIR" chpasswd
 
 cat > "$DIR/etc/motd" <<'EOF'
-flame - Debian 13 (trixie) arm64
+flame - Debian 13 (trixie) arm64, Mobian-style Phosh session
   login: root  password: flame
-  kernel modules: /lib/modules (stock vendor GKI, copied by the initramfs)
+  screen: systemctl status phosh     (phoc + panel via msm_drm)
+  modules: /lib/modules (stock vendor GKI, copied by the initramfs)
+  apps: calls (dialer), osmo (keyboard), nautilus, epiphany
   Waydroid: waydroid init   (needs network; see README for the GKI caveat)
 EOF
-printf 'flame Debian 13 rootfs for Redmi 14C 5G (flame)\n' > "$DIR/etc/flame-image"
+printf 'flame Debian 13 Phosh rootfs for Redmi 14C 5G (flame)\n' > "$DIR/etc/flame-image"
 
 # the shim kexecs/loads this image without needing modules on disk
 rm -rf "$DIR/debootstrap"
@@ -136,7 +187,7 @@ umount_all
 
 USED=$(du -sm "$DIR" | cut -f1)
 SIZE=$(( USED * 130 / 100 + 512 ))
-[ "$SIZE" -lt 2048 ] && SIZE=2048
+[ "$SIZE" -lt 3072 ] && SIZE=3072
 
 log "ext4 image ${SIZE}M (${USED}M used)"
 mkdir -p "$(dirname "$OUT")"

@@ -33,8 +33,10 @@ rootfs on microSD (`LABEL=flame-root`) and `switch_root`s into it.
 - `flame-debian-boot_b.img` — boot v4, stock kernel, flame initramfs
   (`tools/repack_bootimg.py`)
 - `flame-debian-rootfs.img.xz` — Debian 13 arm64 ext4, built in CI
-  (`scripts/build-debian-rootfs.sh`), `systemd`, `weston`, `waydroid`, `lxc`,
-  openssh; root password `flame`
+  (`scripts/build-debian-rootfs.sh`). Mobian-style mobile stack from Debian's
+  own packages: `phosh` + `phoc` (compositor), `osmo` keyboard, `calls` dialer,
+  `feedbackd`, pipewire, NetworkManager, nautilus/epiphany, plus `weston` and
+  `waydroid`. root password `flame`
 - stock `boot.img`, `vendor_boot.img`, `dtbo.img`, `recovery.img`
 
 ## Flash
@@ -99,8 +101,13 @@ the same way (`tools/mklz4legacy.py`).
 
 - Boot path: kernel + initramfs + switch_root — built, needs on-device run
 - Debian 13 rootfs: CI build (debootstrap + qemu-user), validated by mounting
+- Mobile UI: Phosh (`phoc` compositor) is started by `phosh.service`, because
+  this kernel has no VT so gdm/gnome-session cannot take a console. It renders
+  through `msm_drm` once the panel driver binds; software pixels
+  (`WLR_RENDERER=pixman`, `GALLIUM_DRIVER=llvmpipe`) until the Adreno 613 works
 - Display: `msm_drm.ko` and `focaltech_spi.ko` ship in the vendor ramdisk and
-  are copied into the rootfs; weston on DRM is the next step (no VT/fbcon)
+  are copied into the rootfs; `/etc/modules-load.d/flame.conf` loads panel,
+  touch, vibrator and battery drivers at boot
 - Waydroid: package installed, but the stock GKI lacks
   `CONFIG_PID_NS`/`CONFIG_USER_NS`, which LXC (and therefore Waydroid) needs.
   A custom GKI build of 6.6 with those namespaces enabled and the same KMI
