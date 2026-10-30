@@ -1,4 +1,4 @@
-name: flame-mainline
+name: flame-debian
 
 on:
   push:
@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  build:
+  rootfs:
     runs-on: ubuntu-24.04
     timeout-minutes: 300
     steps:
@@ -16,124 +16,41 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq --no-install-recommends \
-            build-essential gcc-aarch64-linux-gnu binutils-aarch64-linux-gnu \
-            bc bison flex libssl-dev libelf-dev cpio xz-utils python3 git \
-            debootstrap qemu-user-static binfmt-support e2fsprogs
+            debootstrap qemu-user-static binfmt-support e2fsprogs xz-utils
+          # make sure the keyring knows the trixie signing keys
+          keyring=$(curl -fsSL https://deb.debian.org/debian/pool/main/d/debian-archive-keyring/ \
+            | grep -oE 'debian-archive-keyring_[^"]+_all\.deb' | sort -V | tail -1)
+          curl -fsSLO "https://deb.debian.org/debian/pool/main/d/debian-archive-keyring/$keyring"
+          sudo dpkg -i "$keyring"
 
-      - name: Fetch Linux 7.2.13
-        run: |
-          curl -fsSLO https://cdn.kernel.org/pub/linux/kernel/v7.x/linux-7.2.13.tar.xz
-          tar xf linux-7.2.13.tar.xz
-          mv linux-7.2.13 linux
-          cd linux
-          git init -q .
-          git add -A
-          git -c user.email=ci@flame -c user.name=ci commit -qm baseline
-          echo "KERNEL=$(make -s kernelversion)" >> "$GITHUB_ENV"
-
-      - name: Fetch ROCKNIX SM4450 patches and sky-linux
-        run: |
-          git clone -q --depth 1 --filter=blob:none --sparse https://github.com/ROCKNIX/distribution rooknix
-          git -C rooknix sparse-checkout set projects/ROCKNIX/devices/SM4450/patches
-          git clone -q --depth 1 https://github.com/orange200213/sky-linux sky
-          ls rooknix/projects/ROCKNIX/devices/SM4450/patches/linux | wc -l
-
-      - name: Apply ROCKNIX SM4450 series
-        run: |
-          cd linux
-          SRC=../rooknix/projects/ROCKNIX/devices/SM4450/patches/linux
-          : > ../patch-report.txt
-          for p in $(ls "$SRC"/*.patch | sort); do
-            if git apply --3way "$p" 2>>../patch-report.txt; then
-              echo "APPLIED $(basename "$p")" >> ../patch-report.txt
-            else
-              echo "FAILED  $(basename "$p")" >> ../patch-report.txt
-            fi
-          done
-          grep -c APPLIED ../patch-report.txt || true
-          grep -c FAILED ../patch-report.txt || true
-
-      - name: Apply sky-linux patches
-        run: |
-          cd linux
-          for p in ../sky/kernel/patches/*.patch; do
-            if git apply --3way "$p" 2>>../patch-report.txt; then
-              echo "APPLIED $(basename "$p")" >> ../patch-report.txt
-            else
-              echo "FAILED  $(basename "$p")" >> ../patch-report.txt
-            fi
-          done
-
-      - name: Install flame DTS
-        run: |
-          cp dts/sm4450-xiaomi-flame.dts linux/arch/arm64/boot/dts/qcom/
-          grep -q sm4450-xiaomi-flame linux/arch/arm64/boot/dts/qcom/Makefile || \
-            echo 'dtb-$(CONFIG_ARCH_QCOM) += sm4450-xiaomi-flame.dtb' >> linux/arch/arm64/boot/dts/qcom/Makefile
-
-      - name: Prepare initramfs
-        run: |
-          curl -fsSL -o alpine.tgz https://dl-cdn.alpinelinux.org/alpine/v3.20/releases/aarch64/alpine-minirootfs-3.20.3-aarch64.tar.gz
-          mkdir -p rootfs
-          tar -xzf alpine.tgz -C rootfs
-          mkdir -p initramfs/bin initramfs/lib initramfs/dev initramfs/proc initramfs/sys
-          cp rootfs/bin/busybox initramfs/bin/busybox
-          cp -a rootfs/lib/ld-musl-aarch64.so.1 initramfs/lib/ 2>/dev/null || true
-          cp -a rootfs/lib/libc.musl-aarch64.so.1 initramfs/lib/ 2>/dev/null || true
-          cp initramfs-init initramfs/init
-          chmod +x initramfs/init initramfs/bin/busybox
-          find initramfs -maxdepth 2 | head -20
-
-      - name: Configure
-        run: |
-          cd linux
-          cp ../config/m1.config .config
-          cat ../config/waydroid.config >> .config
-          echo 'CONFIG_INITRAMFS_SOURCE="../initramfs"' >> .config
-          make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- olddefconfig
-
-      - name: Build Image and DTBs
-        run: |
-          cd linux
-          make -j"$(nproc)" ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- Image dtbs
-
-      - name: Build Debian arm64 SD rootfs (Waydroid-ready)
+      - name: Build Debian 13 arm64 rootfs (Waydroid-ready)
         run: |
           sudo update-binfmts --enable qemu-aarch64 || true
           sudo bash scripts/build-debian-rootfs.sh out/flame-debian-rootfs.img
           ls -lh out/
 
-      - name: Pack shim boot image
+      - name: Validate rootfs
         run: |
-          mkdir -p out
-          cp linux/arch/arm64/boot/Image out/Image
-          cp linux/arch/arm64/boot/dts/qcom/sm4450-xiaomi-flame.dtb out/flame.dtb
-          python3 sky/tools/mklinuxpayload.py out/Image out/flame.dtb out/payload.bin --load 0xc0000000
-          cd sky/shim
-          SHIM_FB_W=720 SHIM_FB_H=1640 ./build-sky.sh ../../out/payload.bin
-          cp out/sky-shim-boot-v4.img ../../out/flame-shim-boot-v4.img
-          ls -la ../../out
-
-      - name: Validate image and write safety notes
-        run: |
+          set -e
           cd out
-          for img in *.img; do
-            magic=$(head -c 8 "$img")
-            echo "$img magic: $magic"
-            [ "$magic" = "ANDROID!" ] || { echo "bad boot image header"; exit 1; }
-            size=$(stat -c%s "$img")
-            [ "$size" -gt 4000000 ] || { echo "$img is suspiciously small"; exit 1; }
-          done
           xz -t flame-debian-rootfs.img.xz
+          xz -dk flame-debian-rootfs.img.xz
+          sudo mkdir -p /mnt/rootfs
+          sudo mount -o loop,ro flame-debian-rootfs.img /mnt/rootfs
+          ls /mnt/rootfs/sbin/init
+          test -x /mnt/rootfs/lib/systemd/systemd
+          test -f /mnt/rootfs/etc/systemd/system/getty.target.wants/serial-getty@ttyGS0.service
+          grep -q flame /mnt/rootfs/etc/hostname
+          if [ -f /mnt/rootfs/root/setup-status.txt ]; then cat /mnt/rootfs/root/setup-status.txt; fi
+          sudo umount /mnt/rootfs
+          sudo rmdir /mnt/rootfs
           cp ../boot-safety.txt BOOT-SAFETY.txt
-          sha256sum * > SHA256SUMS
-          ls -la
+          sha256sum flame-debian-rootfs* BOOT-SAFETY.txt > SHA256SUMS
+          cat SHA256SUMS
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: flame-mainline-${{ github.sha }}
-          path: |
-            out/
-            patch-report.txt
-            linux/.config
-          if-no-files-found: warn
+          name: flame-debian-${{ github.sha }}
+          path: out/
+          if-no-files-found: error

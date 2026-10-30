@@ -1,5 +1,5 @@
 #!/bin/bash
-# Build a Debian bookworm arm64 rootfs image (LABEL=flame-root) for the
+# Build a Debian 13 (trixie) arm64 rootfs image (LABEL=flame-root) for the
 # Xiaomi Redmi 14C 5G (flame), with Waydroid + Weston preinstalled.
 #
 # Runs on an x86_64 host: debootstrap --foreign plus qemu-user-static binfmt
@@ -11,7 +11,7 @@
 set -euo pipefail
 
 OUT=${1:-out/flame-debian-rootfs.img}
-SUITE=${SUITE:-bookworm}
+SUITE=${SUITE:-trixie}
 MIRROR=${MIRROR:-http://deb.debian.org/debian}
 DIR=$(mktemp -d /var/tmp/flame-debroot.XXXXXX)
 XZ=${XZ:-1}
@@ -69,13 +69,13 @@ chroot "$DIR" /bin/bash -c '
 '
 
 log "waydroid package"
-chroot "$DIR" /bin/bash -c '
+chroot "$DIR" env SUITE="$SUITE" /bin/bash -c '
 	if curl -fsSL --max-time 60 https://repo.waydro.id/waydroid.gpg -o /tmp/waydroid.gpg; then
 		gpg --dearmor < /tmp/waydroid.gpg > /usr/share/keyrings/waydroid.gpg
-		echo "deb [signed-by=/usr/share/keyrings/waydroid.gpg] https://repo.waydro.id/ bookworm main" > /etc/apt/sources.list.d/waydroid.list
+		echo "deb [signed-by=/usr/share/keyrings/waydroid.gpg] https://repo.waydro.id/ $SUITE main" > /etc/apt/sources.list.d/waydroid.list
 	else
 		echo "WARN: waydroid key fetch failed, using trusted=yes" >&2
-		echo "deb [trusted=yes] https://repo.waydro.id/ bookworm main" > /etc/apt/sources.list.d/waydroid.list
+		echo "deb [trusted=yes] https://repo.waydro.id/ $SUITE main" > /etc/apt/sources.list.d/waydroid.list
 	fi
 	apt-get update -qq || true
 	if apt-get install -y -qq --no-install-recommends waydroid; then
@@ -90,31 +90,28 @@ echo flame > "$DIR/etc/hostname"
 grep -q "127.0.1.1" "$DIR/etc/hosts" || echo "127.0.1.1 flame" >> "$DIR/etc/hosts"
 
 cat > "$DIR/etc/fstab" <<'EOF'
-proc     /proc  proc     defaults              0 0
-sysfs    /sys   sysfs    defaults              0 0
-devtmpfs /dev   devtmpfs mode=0755,nosuid      0 0
+proc     /proc  proc     defaults               0 0
+sysfs    /sys   sysfs    defaults               0 0
 tmpfs    /tmp   tmpfs    mode=1777,nosuid,nodev 0 0
 EOF
 
-# root shell over USB without a login prompt (the gadget is bound in initramfs)
-mkdir -p "$DIR/etc/systemd/system/serial-getty@ttyGS0.service.d" \
-         "$DIR/etc/systemd/system/getty@tty1.service.d"
-for u in serial-getty@ttyGS0 getty@tty1; do
-	cat > "$DIR/etc/systemd/system/$u.service.d/autologin.conf" <<'EOF'
+# the stock GKI kernel has no devtmpfs and no VT: the initramfs hands over a
+# tmpfs /dev, and the only console is the USB gadget serial (ttyGS0)
+mkdir -p "$DIR/etc/systemd/system/serial-getty@ttyGS0.service.d"
+cat > "$DIR/etc/systemd/system/serial-getty@ttyGS0.service.d/autologin.conf" <<'EOF'
 [Service]
 ExecStart=
 ExecStart=-/sbin/agetty --autologin root --noclear %I $TERM
 EOF
-done
 
 mkdir -p "$DIR/etc/systemd/system/getty.target.wants" \
          "$DIR/etc/systemd/system/multi-user.target.wants"
 ln -sf /usr/lib/systemd/system/serial-getty@.service \
 	"$DIR/etc/systemd/system/getty.target.wants/serial-getty@ttyGS0.service"
-ln -sf /usr/lib/systemd/system/getty@.service \
-	"$DIR/etc/systemd/system/getty.target.wants/getty@tty1.service"
 ln -sf /usr/lib/systemd/system/ssh.service \
 	"$DIR/etc/systemd/system/multi-user.target.wants/ssh.service"
+mkdir -p "$DIR/etc/ssh/sshd_config.d"
+printf 'PermitRootLogin yes\n' > "$DIR/etc/ssh/sshd_config.d/flame.conf"
 if [ -e "$DIR/usr/lib/systemd/system/waydroid-container.service" ]; then
 	ln -sf /usr/lib/systemd/system/waydroid-container.service \
 		"$DIR/etc/systemd/system/multi-user.target.wants/waydroid-container.service"
@@ -123,11 +120,12 @@ fi
 echo 'root:flame' | chroot "$DIR" chpasswd
 
 cat > "$DIR/etc/motd" <<'EOF'
-flame mainline - Debian bookworm (arm64)
-  root password: flame
-  Waydroid: waydroid init   (needs network + a Wayland compositor, e.g. weston)
+flame - Debian 13 (trixie) arm64
+  login: root  password: flame
+  kernel modules: /lib/modules (stock vendor GKI, copied by the initramfs)
+  Waydroid: waydroid init   (needs network; see README for the GKI caveat)
 EOF
-printf 'flame-mainline Debian rootfs for Redmi 14C 5G (flame)\n' > "$DIR/etc/flame-image"
+printf 'flame Debian 13 rootfs for Redmi 14C 5G (flame)\n' > "$DIR/etc/flame-image"
 
 # the shim kexecs/loads this image without needing modules on disk
 rm -rf "$DIR/debootstrap"

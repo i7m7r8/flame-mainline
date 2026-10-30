@@ -1,0 +1,117 @@
+#!/bin/busybox sh
+# flame Debian bring-up init for the stock vendor GKI 6.6 kernel.
+# The vendor ramdisk (merged by the bootloader) provides /lib/modules.
+/bin/busybox --install -s /bin
+export PATH=/bin:/sbin
+
+msg() {
+  echo "flame-debian: $*" > /dev/kmsg 2>/dev/null
+  echo "flame-debian: $*" > /dev/console 2>/dev/null
+}
+
+# GKI has CONFIG_DEVTMPFS unset: run our own tmpfs /dev + mdev
+mkdir -p /dev /proc /sys /config /tmp /newroot
+mount -t tmpfs -o mode=0755 tmpfs /dev
+mknod -m 600 /dev/console c 5 1
+mknod -m 666 /dev/null c 1 3
+mknod -m 666 /dev/zero c 1 5
+mount -t proc proc /proc
+mount -t sysfs sysfs /sys
+mount -t configfs configfs /config 2>/dev/null
+mount -t tmpfs tmpfs /tmp
+msg "initramfs up ($(uname -r))"
+
+# vendor modules are flat in /lib/modules; modprobe wants /lib/modules/$(uname -r)
+KVER=$(uname -r)
+ln -sf /lib/modules /lib/modules/$KVER
+
+if [ -f /lib/modules/modules.load ]; then
+  while read -r m; do
+    case "$m" in ''|\#*) continue ;; esac
+    insmod "/lib/modules/$m" 2>/dev/null
+  done < /lib/modules/modules.load
+fi
+msg "core modules loaded"
+mdev -s
+
+# USB ACM gadget
+G=/config/usb_gadget/g1
+mkdir -p "$G/strings/0x409" "$G/configs/c.1/strings/0x409" "$G/functions/acm.usb0" 2>/dev/null
+echo 0x18d1 > "$G/idVendor" 2>/dev/null
+echo 0xd002 > "$G/idProduct" 2>/dev/null
+echo flame-debian > "$G/strings/0x409/serialnumber" 2>/dev/null
+echo xiaomi > "$G/strings/0x409/manufacturer" 2>/dev/null
+echo "flame debian" > "$G/strings/0x409/product" 2>/dev/null
+echo acm > "$G/configs/c.1/strings/0x409/configuration" 2>/dev/null
+ln -sf "$G/functions/acm.usb0" "$G/configs/c.1/acm.usb0" 2>/dev/null
+
+# UDC appears once dwc3-msm and its dependencies are loaded
+i=0
+while [ -z "$(ls /sys/class/udc 2>/dev/null)" ] && [ $i -lt 25 ]; do
+  modprobe -q dwc3-msm 2>/dev/null
+  modprobe -q phy-msm-ssusb-qmp 2>/dev/null
+  sleep 1
+  i=$((i+1))
+done
+UDC=$(ls /sys/class/udc 2>/dev/null | head -1)
+if [ -n "$UDC" ]; then
+  echo "$UDC" > "$G/UDC" 2>/dev/null && msg "gadget bound to $UDC"
+else
+  msg "no UDC found"
+fi
+mdev -s
+
+# find the Debian ext4 by its label (s_volume_name at superblock+0x78)
+find_root() {
+  for dev in /dev/mmcblk? /dev/mmcblk?p? /dev/sd? /dev/sd??; do
+    [ -b "$dev" ] || continue
+    lbl=$(dd if="$dev" bs=1 skip=1144 count=16 2>/dev/null | strings | head -1)
+    [ "$lbl" = "flame-root" ] && { echo "$dev"; return 0; }
+  done
+  return 1
+}
+
+ROOT=
+i=0
+while [ -z "$ROOT" ] && [ $i -lt 25 ]; do
+  mdev -s 2>/dev/null
+  ROOT=$(find_root)
+  [ -z "$ROOT" ] && sleep 1
+  i=$((i+1))
+done
+
+if [ -n "$ROOT" ]; then
+  msg "root device $ROOT"
+  if mount -t ext4 -o rw "$ROOT" /newroot 2>/dev/null; then
+    if [ -x /newroot/sbin/init ]; then
+      # keep the vendor modules usable after switch_root (display, touch, wifi)
+      if [ ! -e /newroot/lib/modules/.flame-vendor ]; then
+        mkdir -p /newroot/lib/modules
+        cp -a /lib/modules/. /newroot/lib/modules/ 2>/dev/null
+        touch /newroot/lib/modules/.flame-vendor
+      fi
+      for d in dev proc sys config tmp; do
+        mkdir -p "/newroot/$d"
+        mount --move "/$d" "/newroot/$d" 2>/dev/null
+      done
+      msg "switching root"
+      exec switch_root /newroot /sbin/init
+    fi
+    msg "$ROOT has no /sbin/init"
+    umount /newroot
+  else
+    msg "cannot mount $ROOT"
+  fi
+else
+  msg "no partition labelled flame-root"
+fi
+
+# rescue shell over USB
+i=0
+while [ ! -e /dev/ttyGS0 ] && [ $i -lt 60 ]; do sleep 1; i=$((i+1)); done
+if [ -e /dev/ttyGS0 ]; then
+  msg "rescue shell on ttyGS0"
+  exec /bin/sh -c 'exec /bin/sh </dev/ttyGS0 >/dev/ttyGS0 2>&1'
+fi
+msg "no ttyGS0, idling"
+exec /bin/sh

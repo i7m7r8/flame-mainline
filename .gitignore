@@ -3,7 +3,10 @@ rooknix/
 sky/
 rootfs/
 out/
+stock/
 *.tar.*
+*.img
+__pycache__/
 initramfs/bin/
 initramfs/lib/
 initramfs/init

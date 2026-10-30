@@ -1,127 +1,130 @@
-# flame-mainline
+# flame-debian
 
-Mainline Linux for the Xiaomi Redmi 14C 5G / POCO M7 5G (`flame`, Qualcomm SM4450
-"ravelin"), built on GitHub Actions.
+Debian 13 (trixie) arm64 on the Xiaomi Redmi 14C 5G / POCO M7 5G (`flame`,
+Qualcomm SM4450 "ravelin"), dual booted against Android 17.
 
-Based on the proven bring-up by [orange200213/sky-linux](https://github.com/orange200213/sky-linux)
-(Redmi 12 5G, same SoC) and the ROCKNIX SM4450 patch series.
+The kernel is the **stock vendor GKI 6.6.82** from the Infinity X Android 17 ROM
+(`6.6.82-android15-8-gd33b207314e6-ab13612522-4k`). It already drives every
+piece of hardware (c3f panel, focaltech touch, Adreno 613, WCN3990, modem, SD),
+so nothing has to be ported. A small initramfs replaces the Android ramdisk:
+it loads the vendor modules from the ROM's own `vendor_boot`, finds the Debian
+rootfs on microSD (`LABEL=flame-root`) and `switch_root`s into it.
 
-- Base: **Linux 7.2.13** (newest stable)
-- Patches: ROCKNIX `projects/ROCKNIX/devices/SM4450/patches/linux/*` + sky-linux patches
-- Board DT: `dts/sm4450-xiaomi-flame.dts`
-- Boot: sky-style shim in `boot_a` (UEFI boot chain picks the vendor DTB from
-  `vendor_boot`, so a mainline DTB must be supplied by the shim)
+## Layout and safety
 
-## Status
+| slot | contents |
+|------|----------|
+| `boot_a` / `vendor_boot_a` / `dtbo_a` | **untouched** — working Android 17 |
+| `boot_b` | Debian: stock kernel + flame initramfs |
+| `vendor_boot_b` / `dtbo_b` | stock copies from the same ROM |
+| `recovery`, `vbmeta*`, bootloader partitions | **never touched** |
 
-- M0 console: build pipeline up; hardware values provisional
-- M1 USB serial: initramfs sets up a CDC-ACM gadget and a root shell on `ttyGS0`
-- M2 rootfs: Debian 12 arm64 on microSD (`LABEL=flame-root`, `sdhc_2`);
-  initramfs finds it, moves the console mounts and `switch_root`s into it.
-  Image ships on the artifact with weston + Waydroid preinstalled.
-- M3+ (display `c3f` panel, focaltech touch, PM7250B charger, WCN3990, GPU): TODO
+- Only `boot_b`, `vendor_boot_b` and `dtbo_b` are written.
+- Android stays bootable in slot `a`; `fastboot --set-active=a` returns to it
+  at any time, no reflash required.
+- The stock `boot.img`, `vendor_boot.img`, `dtbo.img` and `recovery.img` from
+  the ROM are kept next to the flash images, so slot `b` and recovery can be
+  restored byte for byte.
+- A failed Debian boot just hangs in the initramfs rescue shell (Power+VolDown
+  gets back to fastboot); the bootloader is never modified.
 
-## Confirmed device facts
+## Images
 
-Read back from the running Android 17 ROM (`getprop`/`dumpsys`):
+- `flame-debian-boot_b.img` — boot v4, stock kernel, flame initramfs
+  (`tools/repack_bootimg.py`)
+- `flame-debian-rootfs.img.xz` — Debian 13 arm64 ext4, built in CI
+  (`scripts/build-debian-rootfs.sh`), `systemd`, `weston`, `waydroid`, `lxc`,
+  openssh; root password `flame`
+- stock `boot.img`, `vendor_boot.img`, `dtbo.img`, `recovery.img`
 
-- SKU `c3fin`, hwversion `1.19.0`, 4 GB RAM, dtb_idx 5 (Android slots, `_a` active)
-- SoC SM4450 ravelin, 4K pages
-- UFS `soc/1d84000.ufshc`, USB `a600000.dwc3`
-- Wi-Fi/BT combo: WCN3990-class (vendor DT `qcom,icnss@22800000` + WPSS
-  firmware; BT firmware "cherokee"); not WCN6750
-- Cameras: truly sc5kjns + sc820cs; side fingerprint: goodix
-- GPU Adreno 613, 340-955 MHz
-- Panel: 720x1640 "c3f"-class (vendor DT splash `0xb8000000 + 0x2b00000`)
+## Flash
 
-## Flash (boot_a only, reversible)
-
-The image never touches `boot_b`, `vbmeta`, `dtbo`, `vendor_boot` or any
-bootloader partition, so it cannot brick the device. Before flashing, back up
-the stock boot images (root shell in Android):
+Write the rootfs to a microSD card first:
 
 ```sh
-dd if=/dev/block/by-name/boot_a of=/sdcard/boot_a-stock.img
-dd if=/dev/block/by-name/boot_b of=/sdcard/boot_b-stock.img
+xz -dc flame-debian-rootfs.img.xz | sudo dd of=/dev/sdX bs=4M status=progress conv=fsync
 ```
 
-Try a no-write boot first (works on some bootloaders only):
+Then, while the phone boots Android (slot `a`, `fastboot devices` works):
 
 ```sh
-fastboot boot out/flame-shim-boot-v4.img
-```
-
-Otherwise flash slot a only:
-
-```sh
-fastboot getvar current-slot        # must print a
-fastboot flash boot_a out/flame-shim-boot-v4.img
+fastboot getvar current-slot          # must print: a
+fastboot flash boot_b        flame-debian-boot_b.img
+fastboot flash vendor_boot_b vendor_boot.img
+fastboot flash dtbo_b        dtbo.img
+fastboot --set-active=b
 fastboot reboot
 ```
 
-Watch for a `ttyACM` device on the host, then `picocom -b 115200 /dev/ttyACM0`.
+The USB port becomes a CDC-ACM serial console (`ttyACM0` on Linux, a COM port
+on Windows); log in as `root` / `flame`. This is the only console: the GKI
+kernel has no VT and no fbcon.
 
-Restore Android at any time from fastboot (the bootloader is never touched):
-
-```sh
-fastboot flash boot_a boot_a-stock.img
-```
-
-While the shim is in `boot_a`, recovery is unreachable (recovery boots the
-kernel from the active slot), so restore via fastboot, not via recovery.
-Confirm `fastboot devices` works on your PC before flashing.
-
-No auto-reboot on panic is configured (`panic` unset = hang), so a failed
-boot will not loop. Keep slot b on the stock ROM: it is the automatic
-fallback if slot a keeps failing.
-
-## Dual boot Android 17 + Debian (A/B slots)
-
-The device is A/B: `boot_a` holds the shim (Linux), `boot_b` keeps Android.
-The slot is switched from fastboot, nothing else is rewritten:
+Back to Android:
 
 ```sh
-fastboot getvar current-slot     # shows which side is active
-fastboot --set-active=a          # boot Linux (shim in boot_a)
-fastboot --set-active=b          # boot Android (boot_b untouched)
+fastboot --set-active=a
+fastboot reboot
 ```
 
-Make sure `boot_b` still holds a matching Android 17 boot image before
-relying on it (back it up or re-flash the ROM's `boot.img` to `boot_b`).
-Some Qualcomm ABLs re-try the other slot after repeated failed boots; if that
-happens, `fastboot --set-active=a` puts Linux back.
-
-### Debian rootfs on microSD
-
-1. Download `flame-debian-rootfs.img.xz` from the build artifact and write it
-   to the card (balenaEtcher, Rufus, or `xz -dc ... | dd of=/dev/sdX bs=4M`).
-2. Flash the shim: `fastboot flash boot_a flame-shim-boot-v4.img`.
-3. Insert the card and boot. The initramfs prints `found flame-root on ...`
-   then `switching to rootfs ...`; USB serial autologins as `root`
-   (password `flame`, not needed on the serial console).
-
-Without a card the shim still drops to the M1 shell, so a broken card cannot
-brick the boot.
-
-### Waydroid
-
-The kernel is built with binder/binderfs, overlayfs, cgroup v2 controllers and
-netfilter (`config/waydroid.config`); Waydroid's Debian packages are installed
-in the rootfs. After the card boots:
+Recovery (own 100 MB partition, never written):
 
 ```sh
-waydroid init          # downloads the Android system image (needs network)
-weston &               # or any other Wayland compositor
-waydroid session start
+fastboot reboot recovery              # or Power+VolUp
 ```
 
-Rendering is the real constraint: until the c3f panel and the Adreno 613 work
-(M3/M4), Waydroid can only render through simpledrm with software GL, which is
-slow. Calls/camera inside Waydroid (vendor HALs) are not supported by its
-generic image.
+Restore slot `b` to stock at any time:
 
-## Provisional values (verify from the device)
+```sh
+fastboot flash boot_b        boot.img
+fastboot flash vendor_boot_b vendor_boot.img
+fastboot flash dtbo_b        dtbo.img
+```
 
-- `/memory@80000000`: `0x80000000 + 0x68e00000` (assumed same as sky 4 GB)
-- `simple-framebuffer`: 720x1640, stride 2880, region `0xb8000000 + 0x2b00000`
-  (region confirmed from flame vendor DTB; stride provisional)
+## What the initramfs does
+
+Because the stock GKI config has `CONFIG_DEVTMPFS=n` and `CONFIG_VT=n`, the
+init (`initramfs-vendor/init`) runs its own `tmpfs /dev` + `mdev`, loads the
+modules listed in `vendor_boot`'s `/lib/modules/modules.load`, `modprobe`s
+`dwc3-msm` (USB), binds a configfs ACM gadget, scans `/dev/mmcblk*` and
+`/dev/sd*` for the ext4 label `flame-root`, copies `/lib/modules` into the new
+root (so Debian can later `modprobe` display/touch/wifi drivers), moves
+`/dev /proc /sys /config /tmp` and `exec switch_root /sbin/init`.
+Without a card it drops to a rescue shell on `ttyGS0` instead of hanging.
+
+Stock ramdisks concatenate as LZ4 legacy frames, so the initramfs is packed
+the same way (`tools/mklz4legacy.py`).
+
+## Status
+
+- Boot path: kernel + initramfs + switch_root — built, needs on-device run
+- Debian 13 rootfs: CI build (debootstrap + qemu-user), validated by mounting
+- Display: `msm_drm.ko` and `focaltech_spi.ko` ship in the vendor ramdisk and
+  are copied into the rootfs; weston on DRM is the next step (no VT/fbcon)
+- Waydroid: package installed, but the stock GKI lacks
+  `CONFIG_PID_NS`/`CONFIG_USER_NS`, which LXC (and therefore Waydroid) needs.
+  A custom GKI build of 6.6 with those namespaces enabled and the same KMI
+  would unblock it; do not expect the stock kernel to run containers.
+- Mainline 7.x work that preceded this route is kept in `linux/`, `dts/`,
+  `config/` and the older commits; it is not part of the image anymore.
+
+## Rebuilding the boot image
+
+The stock kernel images are not committed (they are ~100 MB ROM extracts).
+Place them in `stock/`:
+
+```
+stock/boot.img          # boot_a dump / payload boot.img
+stock/vendor_boot.img   # payload vendor_boot.img
+stock/payload.bin       # optional: extracts dtbo/recovery
+```
+
+```sh
+python3 tools/mkinitramfs.py out/tree out/ramdisk.img --lz4legacy
+python3 tools/repack_bootimg.py stock/boot.img out/ramdisk.img \
+        out/flame-debian-boot_b.img --cmdline 'console=ttyGS0'
+python3 tools/payload_extract.py stock/payload.bin dtbo out/dtbo.img
+```
+
+`out/tree` is `/init` (`initramfs-vendor/init`) plus a static aarch64
+`busybox` from Debian's `busybox-static` package.

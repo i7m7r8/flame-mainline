@@ -1,43 +1,37 @@
-flame-mainline shim image - safety notes
+flame Debian 13 dual boot - safety notes
 ========================================
 
-This image only ever goes to the boot_a partition. It does not touch
-boot_b, vbmeta, dtbo, vendor_boot or any bootloader partition, so the
-bootloader itself can never be bricked by flashing it.
+Android 17 lives in slot a and is not touched. All writes go to slot b:
 
-Before flashing, back up the current boot images (root shell in Android):
+  boot_b          flame-debian-boot_b.img   (stock kernel + flame initramfs)
+  vendor_boot_b   vendor_boot.img           (stock copy)
+  dtbo_b          dtbo.img                  (stock copy)
 
-  dd if=/dev/block/by-name/boot_a of=/sdcard/boot_a-stock.img
+Never flash the bootloader partitions (abl, xbl, hyp, tz, devcfg, ...),
+vbmeta, or anything ending in _a. That is what keeps the device unbrickable.
+
+Before flashing (from Android, root shell or adb root):
+
   dd if=/dev/block/by-name/boot_b of=/sdcard/boot_b-stock.img
+  dd if=/dev/block/by-name/vendor_boot_b of=/sdcard/vendor_boot_b-stock.img
+  dd if=/dev/block/by-name/dtbo_b of=/sdcard/dtbo_b-stock.img
 
-Then copy both to a PC:
+The ROM extracts in this folder (boot.img, vendor_boot.img, dtbo.img) are the
+same images and are enough to restore slot b byte for byte.
 
-  adb pull /sdcard/boot_a-stock.img
-  adb pull /sdcard/boot_b-stock.img
+Switch slots from fastboot:
 
-Safest test - no flash at all (works on some bootloaders, not all):
+  fastboot --set-active=a     Android 17 (slot a, untouched)
+  fastboot --set-active=b     Debian (slot b)
 
-  fastboot boot out/flame-shim-boot-v4.img
+Recovery is its own 100 MB partition and is never modified:
 
-If the bootloader says the command is unknown, flash only boot_a:
+  fastboot reboot recovery    (needs recovery-stock.img only if it was
+                               damaged by something else - not this process)
 
-  fastboot getvar current-slot          # must print a
-  fastboot flash boot_a out/flame-shim-boot-v4.img
-  fastboot reboot
+The Debian boot never auto-reboots: if the rootfs card is missing or broken,
+the initramfs stays in a rescue shell on the USB serial gadget. Hold
+Power+VolUp/Power+VolDown to leave it and reach recovery/fastboot.
 
-No auto-reboot on kernel panic is configured (panic timeout 0), so a
-failed boot simply hangs; it will not loop. Hold Power+VolDown to get
-back to fastboot (Power+VolUp for recovery).
-
-Restore Android at any time with the backup (fastboot is in the
-bootloader and is never affected by this image):
-
-  fastboot flash boot_a boot_a-stock.img
-
-Note: while the shim sits in boot_a, LineageOS recovery is temporarily
-unreachable (recovery boots the kernel from the active boot slot). The
-bootloader/fastboot is not affected, so keep a PC + USB cable handy and
-confirm `fastboot devices` works before flashing.
-
-Never flash boot_b with this image: keeping slot b on the stock ROM is
-the built-in fallback if slot a keeps failing.
+If slot b refuses to boot after flashing, set slot a active again - no
+reflash is needed, Android was never modified.
