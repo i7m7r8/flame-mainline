@@ -1600,7 +1600,11 @@
 			      "ahb";
 
 		power-domains = <&gpucc GPU_CC_CX_GDSC>;
-		status = "okay";
+		/*
+		 * GPU SMMU probe times out (-110) before gpucc GDSCs are usable;
+		 * the GPU itself is disabled, so park the SMMU until M4.
+		 */
+		status = "disabled";
 	};
 };
 
