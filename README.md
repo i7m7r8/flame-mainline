@@ -34,9 +34,10 @@ rootfs on microSD (`LABEL=flame-root`) and `switch_root`s into it.
   (`tools/repack_bootimg.py`)
 - `flame-debian-rootfs.img.xz` — Debian 13 arm64 ext4, built in CI
   (`scripts/build-debian-rootfs.sh`). Mobian-style mobile stack from Debian's
-  own packages: `phosh` + `phoc` (compositor), `osmo` on-screen keyboard,
-  `feedbackd`, `phosh-mobile-settings`, pipewire, NetworkManager,
-  nautilus/epiphany, plus `weston` and `waydroid`. root password `flame`
+  own packages: `phosh` + `phoc` (compositor), `squeekboard` on-screen
+  keyboard, `osmo`, `feedbackd`, `phosh-mobile-settings`, pipewire,
+  NetworkManager, nautilus/epiphany, plus `weston` and `waydroid`.
+  root password `flame`
   (no dialer: `calls` is not in trixie - add later from source or Mobian repo)
 - stock `boot.img`, `vendor_boot.img`, `dtbo.img`, `recovery.img`
 
@@ -101,9 +102,11 @@ the same way (`tools/mklz4legacy.py`).
 ## Status
 
 - Boot path: kernel + initramfs + switch_root — built, needs on-device run
-- Debian 13 rootfs: CI build (debootstrap + qemu-user), validated by mounting
-- Mobile UI: Phosh (`phoc` compositor) is started by `phosh.service`, because
-  this kernel has no VT so gdm/gnome-session cannot take a console. It renders
+- Debian 13 rootfs: CI build (debootstrap + qemu-user), validated read-only
+  through `debugfs` (runners do not allow loop mounts)
+- Mobile UI: `phosh.service` starts `phoc -S -E /usr/libexec/phosh` directly,
+  because this kernel has no VT so gdm/gnome-session and the packaged
+  `phosh.service` (both need `/dev/tty0` + a VT) cannot be used. It renders
   through `msm_drm` once the panel driver binds; software pixels
   (`WLR_RENDERER=pixman`, `GALLIUM_DRIVER=llvmpipe`) until the Adreno 613 works
 - Display: `msm_drm.ko` and `focaltech_spi.ko` ship in the vendor ramdisk and
