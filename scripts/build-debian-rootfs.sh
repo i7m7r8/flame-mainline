@@ -1,7 +1,7 @@
 #!/bin/bash
 # Build a Debian 13 (trixie) arm64 mobile rootfs image (LABEL=flame-root) for
 # the Xiaomi Redmi 14C 5G (flame): Mobian-style stack - Phosh/phoc, osmo,
-# calls, feedbackd - plus Weston and Waydroid.
+# squeekboard, feedbackd - plus Weston and Waydroid.
 #
 # Runs on an x86_64 host: debootstrap --foreign plus qemu-user-static binfmt
 # execute the arm64 chroot (second stage, apt, waydroid package).
@@ -67,8 +67,8 @@ chroot "$DIR" /bin/bash -c '
 		openssh-server sudo nano less htop file \
 		network-manager modemmanager \
 		pipewire wireplumber alsa-utils \
-		phosh phoc osmo feedbackd phosh-mobile-settings \
-		gsettings-desktop-schemas dconf-cli \
+		phosh phoc osmo squeekboard feedbackd phosh-mobile-settings \
+		gsettings-desktop-schemas dconf-cli slurp \
 		nautilus epiphany-browser gnome-system-monitor \
 		weston wayland-utils libgl1-mesa-dri libgles2 mesa-utils \
 		lxc python3
@@ -135,13 +135,25 @@ leds-qpnp-vibrator-ldo
 qti_battery_charger_main
 EOF
 
-# No VT in this kernel, so gdm/phosh-session cannot be used: phoc (the wlroots
-# compositor of Phosh) runs as a plain systemd service and grabs DRM master
-# directly as root.
+# No VT in this kernel, so gdm and the packaged phosh.service (it needs
+# /dev/tty0, /dev/tty7 and a PAM session) are both unusable. Start phoc
+# directly as root instead: it takes DRM master and launches the shell itself.
+# Note trixie's phosh has no /usr/bin/phosh - the shell is /usr/libexec/phosh.
+mkdir -p "$DIR/etc/phosh"
+cat > "$DIR/etc/phosh/phoc.ini" <<'EOF'
+[core]
+xwayland=false
+
+# c3f panel behind msm_drm; harmless while the display is not up yet
+[output:DSI-1]
+mode = 720x1640
+scale = 1
+EOF
+
 cat > "$DIR/etc/systemd/system/phosh.service" <<'EOF'
 [Unit]
-Description=Phosh mobile session (phoc)
-After=network.target systemd-modules-load.service
+Description=Phosh mobile session (phoc + phosh, no VT)
+After=systemd-modules-load.service
 Wants=systemd-modules-load.service
 
 [Service]
@@ -149,14 +161,16 @@ User=root
 PAMName=
 Environment=XDG_RUNTIME_DIR=/run/user/0
 Environment=XDG_SESSION_TYPE=wayland
-Environment=GALLIUM_DRIVER=llvmpipe
+Environment=XDG_SESSION_CLASS=user
+Environment=XDG_CURRENT_DESKTOP=Phosh:GNOME
+Environment=WLR_BACKENDS=drm,libinput
 Environment=WLR_RENDERER=pixman
+Environment=GALLIUM_DRIVER=llvmpipe
 Environment=MOZ_ENABLE_WAYLAND=1
 Environment=GTK_BACKEND=wayland
 ExecStartPre=/bin/mkdir -p /run/user/0
-ExecStartPre=/bin/chown -R root:root /run/user/0
 ExecStartPre=/bin/chmod 0700 /run/user/0
-ExecStart=/usr/bin/dbus-run-session -- /usr/bin/phoc
+ExecStart=/usr/bin/dbus-run-session -- /usr/bin/phoc -v -S -C /etc/phosh/phoc.ini -E /usr/libexec/phosh
 Restart=on-failure
 RestartSec=3
 
@@ -171,9 +185,9 @@ echo 'root:flame' | chroot "$DIR" chpasswd
 cat > "$DIR/etc/motd" <<'EOF'
 flame - Debian 13 (trixie) arm64, Mobian-style Phosh session
   login: root  password: flame
-  screen: systemctl status phosh     (phoc + panel via msm_drm)
+  screen: systemctl status phosh     (phoc + /usr/libexec/phosh on msm_drm)
   modules: /lib/modules (stock vendor GKI, copied by the initramfs)
-  apps: osmo (keyboard), nautilus, epiphany, phosh-mobile-settings
+  apps: squeekboard (on-screen keyboard), osmo, nautilus, epiphany
   Waydroid: waydroid init   (needs network; see README for the GKI caveat)
 EOF
 printf 'flame Debian 13 Phosh rootfs for Redmi 14C 5G (flame)\n' > "$DIR/etc/flame-image"
