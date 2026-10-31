@@ -1,0 +1,186 @@
+name: mainline kernel (flame)
+
+# Builds upstream Linux for SM4450 with the ROCKNIX SM4450 patch series plus
+# this repo's flame board DTS. Image + dtbs only (milestones P0/P1); the EL1
+# shim and boot_b packing come once the tree builds clean.
+
+on:
+  workflow_dispatch:
+    inputs:
+      kernel_version:
+        description: upstream stable version to build
+        default: '7.1.2'
+        required: true
+        type: string
+      rocknix_ref:
+        description: ROCKNIX/distribution ref holding the SM4450 patches
+        default: 'next'
+        required: true
+        type: string
+  push:
+    branches: [main]
+    paths:
+      - 'dts/**'
+      - 'patches/**'
+      - 'config/flame.fragment'
+      - '.github/workflows/kernel.yml'
+
+env:
+  KERNEL_VERSION: ${{ inputs.kernel_version || '7.1.2' }}
+  ROCKNIX_REF: ${{ inputs.rocknix_ref || 'next' }}
+  ARCH: arm64
+  CROSS_COMPILE: aarch64-linux-gnu-
+
+jobs:
+  kernel:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate inputs
+        run: |
+          set -euo pipefail
+          # these come from workflow_dispatch and end up in URLs and shell args
+          case "$KERNEL_VERSION" in
+            *[!0-9.]*|''|*/*) echo "bad kernel_version: $KERNEL_VERSION"; exit 1 ;;
+          esac
+          case "$ROCKNIX_REF" in
+            *[!A-Za-z0-9._-]*|''|*/*) echo "bad rocknix_ref: $ROCKNIX_REF"; exit 1 ;;
+          esac
+          series="v$(echo "$KERNEL_VERSION" | cut -d. -f1).x"
+          echo "SERIES=$series" >> "$GITHUB_ENV"
+
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            bc bison flex libelf-dev libssl-dev cpio rsync xz-utils \
+            device-tree-compiler patch make gcc-aarch64-linux-gnu \
+            aarch64-linux-gnu-binutils kmod python3
+
+      - name: Cache source tarball
+        uses: actions/cache@v4
+        with:
+          path: dl
+          key: linux-${{ env.KERNEL_VERSION }}
+
+      - name: Fetch kernel
+        run: |
+          set -euo pipefail
+          mkdir -p dl "$RUNNER_TEMP/build"
+          T="linux-${KERNEL_VERSION}.tar.xz"
+          [ -s "dl/$T" ] || curl -fSL --retry 3 -o "dl/$T" \
+            "https://cdn.kernel.org/pub/linux/kernel/${SERIES}/${T}"
+          tar -xf "dl/$T" -C "$RUNNER_TEMP/build"
+          echo "SRC=$RUNNER_TEMP/build/linux-${KERNEL_VERSION}" >> "$GITHUB_ENV"
+
+      - name: Fetch ROCKNIX SM4450 patch series
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --filter=blob:none --sparse \
+            "https://github.com/ROCKNIX/distribution" -b "$ROCKNIX_REF" rocknix
+          git -C rocknix sparse-checkout set \
+            projects/ROCKNIX/devices/SM4450/patches/linux
+          echo "PATCHDIR=$GITHUB_WORKSPACE/rocknix/projects/ROCKNIX/devices/SM4450/patches/linux" >> "$GITHUB_ENV"
+          ls "$PATCHDIR" | wc -l
+
+      - name: Apply patch series
+        run: |
+          set -uo pipefail
+          cd "$SRC"
+          mkdir -p "$GITHUB_WORKSPACE/out"
+          rep="$GITHUB_WORKSPACE/out/patch-report.txt"
+          : > "$rep"
+          applied=0
+          rejected=0
+          while read -r p; do
+            case "$p" in ''|'#'*) continue ;; esac
+            if [ ! -f "$PATCHDIR/$p" ]; then
+              echo "MISSING   $p" | tee -a "$rep"
+              rejected=$((rejected+1)); continue
+            fi
+            # dry run first: a half-applied patch breaks every later one
+            if patch -p1 -N -f --dry-run -i "$PATCHDIR/$p" >/dev/null 2>&1 &&
+               patch -p1 -N -f -i "$PATCHDIR/$p" >/dev/null 2>&1; then
+              echo "ok        $p" >> "$rep"
+              applied=$((applied+1))
+            else
+              echo "REJECT    $p" | tee -a "$rep"
+              rejected=$((rejected+1))
+            fi
+          done < "$GITHUB_WORKSPACE/patches/rocknix-sm4450.txt"
+          for p in "$GITHUB_WORKSPACE"/patches/local/*.patch; do
+            [ -e "$p" ] || continue
+            if patch -p1 -N -f --dry-run -i "$p" >/dev/null 2>&1 &&
+               patch -p1 -N -f -i "$p" >/dev/null 2>&1; then
+              echo "ok        local/$(basename "$p")" >> "$rep"
+            else
+              echo "REJECT    local/$(basename "$p")" | tee -a "$rep"
+              rejected=$((rejected+1))
+            fi
+          done
+          echo "applied=$applied rejected=$rejected" | tee -a "$rep"
+          find . -name '*.rej' -print > "$GITHUB_WORKSPACE/out/rejects.txt" || true
+          test "$rejected" -eq 0   # P0 gate: see patch-report.txt / rejects.txt
+
+      - name: Install flame board DTS
+        run: |
+          set -euo pipefail
+          cd "$SRC"
+          cp "$GITHUB_WORKSPACE/dts/sm4450-xiaomi-flame.dts" arch/arm64/boot/dts/qcom/
+          python3 - <<'PY'
+          import re
+          p = 'arch/arm64/boot/dts/qcom/Makefile'
+          lines = open(p).read().splitlines()
+          if any('sm4450-xiaomi-flame' in l for l in lines):
+              raise SystemExit('already listed')
+          for i, l in enumerate(lines):
+              if l.startswith('dtb-$(CONFIG_ARCH_QCOM)'):
+                  lines.insert(i + 1, 'dtb-$(CONFIG_ARCH_QCOM)\t+= sm4450-xiaomi-flame.dtb')
+                  break
+          else:
+              raise SystemExit('no CONFIG_ARCH_QCOM block')
+          open(p, 'w').write('\n'.join(lines) + '\n')
+          PY
+          grep -n 'sm4450' arch/arm64/boot/dts/qcom/Makefile
+
+      - name: Configure
+        run: |
+          set -euo pipefail
+          cd "$SRC"
+          make ARCH=$ARCH CROSS_COMPILE=$CROSS_COMPILE defconfig
+          ./scripts/kconfig/merge_config.sh -m .config \
+            "$GITHUB_WORKSPACE/config/flame.fragment"
+          make ARCH=$ARCH CROSS_COMPILE=$CROSS_COMPILE olddefconfig
+          cp .config "$GITHUB_WORKSPACE/out/flame.config"
+
+      - name: Build Image and dtbs
+        run: |
+          set -euo pipefail
+          cd "$SRC"
+          make ARCH=$ARCH CROSS_COMPILE=$CROSS_COMPILE -j"$(nproc)" \
+            Image dtbs 2>&1 | tee "$GITHUB_WORKSPACE/out/build.log"
+          grep -iE 'error|warning: .*sm4450' "$GITHUB_WORKSPACE/out/build.log" | head -40 || true
+
+      - name: Package
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE/out"
+          cp "$SRC/arch/arm64/boot/Image" Image
+          cp "$SRC/arch/arm64/boot/dts/qcom/sm4450-xiaomi-flame.dtb" .
+          grep -E '^(CONFIG_(DRM_MSM|INTERCONNECT_QCOM_SM4450|SM_GCC_4450|SM_DISPCC_4450|SM_GPUCC_4450|SM_CAMCC_4450|PINCTRL_SM4450|MMC_SDHCI_MSM|SCSI_UFS_QCOM|USB_DWC3_QCOM|PHY_QCOM.*|ATH10K.*|BT_QCA|SND_SOC.*|QCOM_GPI_DMA|TOUCHSCREEN.*|REGULATOR_QCOM.*|IOMMU.*|QCOM_PMIC_GLINK|UCSI_GLINK|QCOM_BATTMGR))=' \
+            flame.config > enabled.txt || true
+          dtc -I dtb -O dts sm4450-xiaomi-flame.dtb > sm4450-xiaomi-flame.cdt.dts 2>/dev/null
+          sha256sum Image sm4450-xiaomi-flame.dtb > SHA256SUMS
+          cp "$GITHUB_WORKSPACE/boot-safety.txt" BOOT-SAFETY.txt
+          ls -lh
+          cat SHA256SUMS
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: flame-mainline-${{ github.sha }}
+          path: out/
+          if-no-files-found: warn

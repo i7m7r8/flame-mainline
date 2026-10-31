@@ -1,0 +1,66 @@
+# ROCKNIX/distribution projects/ROCKNIX/devices/SM4450/patches/linux
+# Subset needed for flame (a phone, not a handheld). Applied in this order.
+# Excluded on purpose: 0010 ch13726a panel, 0016/0059 rsinput gamepad,
+# 0053/0055/0058 bato joypad + RGB LEDs, 0056 bato wcd937x volume TLV.
+
+# --- GPU / display core
+0001-drm-msm-adreno-add-a613-catalog-entry.patch
+0008-iommu-arm-smmu-qcom-add-sm4450.patch
+0013-clk-qcom-gpucc-sm4450-add-hlos1-vote-gpu-smmu.patch
+0014-clk-qcom-gpucc-sm4450-enable-gx-gdsc.patch
+0015-drm-msm-a6xx-avoid-gmu-cx-reads-on-a613.patch
+0017-clk-qcom-gpucc-sm4450-fix-gfx3d-rcg-ops.patch
+0018-clk-qcom-gpucc-sm4450-retain-gx-gdsc-regs.patch
+0009-drm-msm-add-sm4450-display.patch
+0011-clk-qcom-dispcc-sm4450-fix-mdp-clk-src-ops.patch
+0012-clk-qcom-dispcc-sm4450-quiesce-splash.patch
+0019-drm-msm-dpu-stop-boot-scanout.patch
+0050-drm-panel-add-focaltech-ft7131m.patch
+
+# --- interconnect (nothing works without it: dpu, ufs, geniqos, gpu)
+0006-interconnect-qcom-add-sm4450.patch
+
+# --- power domains / PMIC
+0002-pmdomain-qcom-rpmhpd-add-lcx-for-sm4450.patch
+0005-soc-qcom-pd-mapper-add-sm4450.patch
+0004-regulator-qcom-rpmh-add-pm6450.patch
+0022-regulator-qcom-rpmh-add-pbs-type.patch
+0060-regulator-qcom-rpmh-switch-pm6450-sd-ldos-through-pbs.patch
+0023-leds-qcom-lpg-add-pm6450-pwm.patch
+0060-leds-qcom-lpg-support-inversed-pwm-polarity.patch
+
+# --- remoteproc (ADSP / WPSS) and SoC glue
+0003-remoteproc-qcom-pas-add-sm4450-adsp-wpss.patch
+0057-bato-arm64-dts-qcom-sm4450-add-cpu-capacity-and-power-coefficients.patch
+
+# --- PHYs: USB3/DP combo, UFS
+0040-phy-qcom-qmp-combo-add-sm4450.patch
+0041-phy-qcom-qmp-combo-correct-v4-dp-pre-emphasis.patch
+0042-phy-qcom-qmp-combo-prevent-pm-runtime-suspend-at-boot.patch
+0043-phy-qcom-qmp-ufs-add-sm4450.patch
+
+# --- console / serial
+0024-serial-qcom-geni-restart-terminated-rx-command.patch
+
+# --- USB Type-C and battery (pmic_glink)
+0049-usb-typec-ucsi_glink-add-sm4450-quirk.patch
+0051-power-supply-qcom_battmgr-allow-setting-the-USB-input-current-limit.patch
+0052-power-supply-qcom_battmgr-report-the-USB-adapter-type.patch
+0054-power-supply-rename-qcom-battmgr-sysfs.patch
+
+# --- Bluetooth (hci_qca for the WCN39xx family) + Wi-Fi serial glue
+0045-drivers-use-soc-serial-for-wifi-and-bluetooth.patch
+0046-bluetooth-hci_qca-include-wcn3950-in-wcn-family-switches.patch
+0047-bluetooth-hci_qca-drop-baudrate-vendor-event-for-wcn3950.patch
+0048-bluetooth-hci_qca-keep-ibs-disabled-for-wcn3950.patch
+
+# --- audio (LPASS machine driver, soundwire, smartpa)
+0030-ASoC-qcom-sc8280xp-i2s-clk-support.patch
+0031-ASoC-codecs-aw88166-support-changing-sample-rate-and-bit-width.patch
+0032-ASoC-codecs-aw88166-reduce-log-spam.patch
+0033-ASoC-codecs-aw88166-remove-fade-in-out-on-start-stop.patch
+0034-ASoC-codecs-aw88166-make-volume-control-usable.patch
+0039-soundwire-qcom-arm-wake-detector-for-clock-stop.patch
+
+# --- touch follow-up
+0061-input-edt-ft5x06-follow-the-panel-power-state.patch
