@@ -201,9 +201,7 @@ static int c3f_probe(struct mipi_dsi_device *dsi)
 	/* the DSI host must be powered (LP-11) before the init commands */
 	ctx->panel.prepare_prev_first = true;
 
-	ret = devm_drm_panel_add(&dsi->dev, &ctx->panel);
-	if (ret)
-		return ret;
+	drm_panel_add(&ctx->panel);
 
 	dsi->lanes = 4;
 	dsi->format = MIPI_DSI_FMT_RGB888;

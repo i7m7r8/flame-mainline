@@ -37,7 +37,7 @@ Missing upstream entirely — everything a phone needs:
 | `dwc3-qcom` | ✅ now matches generic `qcom,snps-dwc3` | DT only |
 | Type-C: UCSI over glink | partial | `0049-usb-typec-ucsi_glink-add-sm4450-quirk` |
 | battery/charger via pmic_glink | ✅ driver | `0051`, `0052`, `0054` battmgr fixes |
-| touch | `edt-ft5x06`, `focaltech-ft8709` exist | `0050-drm-panel-add-focaltech-ft7131m`, `0061-input-edt-ft5x06-follow-the-panel-power-state`; flame's IC is a `fts` part (`ic-type 0x8726081c`) → may need the vendor `focaltech,fts` driver ported |
+| touch | no Focaltech I2C driver exists upstream (`drivers/input/touchscreen/` has only `edt-ft5x06` for this family; `focaltech_ft6236_i2c.c` is not in 7.1.y) | `0061-input-edt-ft5x06-follow-the-panel-power-state` + our own `focaltech,ft8726` match entry (`patches/local/manifest`); flame's vendor `ic-type 0x8726081c` is an FT8726, and the vendor blob in the ramdisk is `focaltech_spi.ko`, so if the frame format turns out to be FTS rather than FT5x06 the fallback is porting the FTS protocol parser |
 | Wi-Fi/BT | ❌ `icnss`/WCN3990 not upstream; `ath10k/ahb.c` matches only `qcom,ipq4019-wifi` | `0045`/`0046`/`0047`/`0048` are for **WCN3950** (`hci_qca`), which *is* the same WCN39xx family as flame's WCN3990 — useful, but the WLAN side still needs a port |
 | audio (LPASS/CDSP, wcd/va/rx/wsa macros, soundwire, aw88166) | partial (`qcom,sc8280xp` machine driver) | `0030`, `0031`–`0034`, `0039`, `0056` |
 | thermal | `qcom,tsens-v2` ✅ | DT (2 controllers on flame) |
@@ -48,6 +48,41 @@ nothing else. The ROCKNIX SM4450 series (49 patches, kept in
 `packages/…/patches/linux` for the anbernic RG55G1) is exactly the missing
 display/GPU/ICC/PHY/PMIC/remoteproc/Type-C layer, and it is maintained against
 a current kernel, so the port is mostly *assemble + fix up DT*, not write drivers.
+
+## Can the stock Infinity X Android 17 ROM run on this kernel?
+
+No — and it is an ABI fact, not a missing-driver problem. `stock/vendor_boot.img`
+header v4 carries the vendor ramdisk as an uncompressed newc cpio with **288
+`.ko` files** (`python3 - <<'PY'` over the cpio header fields, or
+`bsdtar -tf stock/vendor_ramdisk.cpio`):
+
+`msm_drm.ko`, `qcom_q6v5_pas.ko`, `qcom_glink*.ko`, `qti_pmic_glink.ko`,
+`qcom_ice.ko`, `focaltech_spi.ko`, `nt36xxx_spi.ko`, `goodix_fp.ko`,
+`mi_thermal_interface.ko`, `gh_*` (Gunyah), `pinctrl-ravelin.ko`,
+`gcc/dispcc/gpucc/camcc/debugcc-sm4450.ko`, …
+
+Two independent blockers:
+
+1. **Module loading.** They are built against `6.6.82-android15-8` with
+   modversions CRCs and a GKI `vermagic`. A mainline kernel exports different
+   CRCs, so `fopen`+`finit_module` fails with `ENOEXEC`/`EBADFD` for all 288,
+   and the first-stage vendor init that expects them errors out.
+2. **UAPI.** Even if a mainline tree carried a driver for the same block, the
+   HALs use the *vendor* driver interface: `msm_drm`'s `sde_drm` extensions,
+   `kgsl`, `msm_vidc`, `qcom,ipa`, `wcd*` Q6 ioctls. Mainline `drm/msm`,
+   `v4l2`/`mem2mem`, and ALSA expose different nodes and ioctls.
+
+So "mainline kernel + unchanged stock ROM" cannot reach a working UI. The two
+routes that do reach Android on mainline, both of which need our kernel only
+as a *base*:
+
+| route | userspace | what it costs |
+|-------|-----------|---------------|
+| A: AOSP/GSI + mainline HALs | downloadable AOSP `system.img` (Treble), `drm_hwcomposer` over `drm/msm` for c3f, `minigbm` + panfrost/panthor for Adreno 613, ALSA for LPASS, Linux-input for touch | a vendor/HAL image assembled in CI; no Xiaomi blobs |
+| B: Debian 13 + Phosh + Waydroid | already built (`flame-debian-boot_b.img` path), Waydroid gives the Android apps | nothing new; verified namespaces/binderfs on the stock kernel |
+
+Route B is delivered. Route A is the plan for "Android on mainline". The
+kernel work below (P0..P9) serves both, which is why it is done first.
 
 ## Boot handover (why a shim is needed)
 

@@ -183,9 +183,11 @@ jobs:
         run: |
           set -euo pipefail
           cd "$SRC"
+          # only flame's dtb: `dtbs` builds ~1500 boards and adds ~4 minutes
           make ARCH=$ARCH CROSS_COMPILE=$CROSS_COMPILE -j"$(nproc)" \
-            Image dtbs 2>&1 | tee "$GITHUB_WORKSPACE/out/build.log"
-          grep -iE 'error|warning: .*sm4450' "$GITHUB_WORKSPACE/out/build.log" | head -40 || true
+            Image arch/arm64/boot/dts/qcom/sm4450-xiaomi-flame.dtb \
+            2>&1 | tee "$GITHUB_WORKSPACE/out/build.log"
+          ls -la arch/arm64/boot/Image arch/arm64/boot/dts/qcom/sm4450-xiaomi-flame.dtb
 
       - name: Package
         run: |
