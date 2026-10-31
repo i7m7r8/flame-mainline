@@ -183,9 +183,12 @@ jobs:
         run: |
           set -euo pipefail
           cd "$SRC"
-          # only flame's dtb: `dtbs` builds ~1500 boards and adds ~4 minutes
+          # Only flame's dtb: `dtbs` builds ~1500 boards and adds ~4 minutes.
+          # The top-level `%.dtb` rule prepends $(dtstree) itself, so the target
+          # has to be relative to arch/arm64/boot/dts/ or kbuild asks for
+          # arch/arm64/boot/dts/arch/arm64/boot/dts/qcom/... and stops.
           make ARCH=$ARCH CROSS_COMPILE=$CROSS_COMPILE -j"$(nproc)" \
-            Image arch/arm64/boot/dts/qcom/sm4450-xiaomi-flame.dtb \
+            Image qcom/sm4450-xiaomi-flame.dtb \
             2>&1 | tee "$GITHUB_WORKSPACE/out/build.log"
           ls -la arch/arm64/boot/Image arch/arm64/boot/dts/qcom/sm4450-xiaomi-flame.dtb
 
