@@ -1,0 +1,11 @@
+# Rules for tools/install_local.py:
+#   FILE | anchor regex | before|after | MARKER | text
+# \t and \n in the text are escapes. The anchor must exist in the target or
+# the install step fails loudly instead of quietly dropping a driver. MARKER
+# makes the rule idempotent (and a no-op if upstream grows the same line).
+
+drivers/gpu/drm/panel/Makefile | ^\s*obj-\$\(CONFIG_DRM_PANEL_SIMPLE\) | after | DRM_PANEL_XIAOMI_C3F | obj-$(CONFIG_DRM_PANEL_XIAOMI_C3F) += panel-xiaomi-c3f.o
+
+drivers/gpu/drm/panel/Kconfig | ^endmenu$ | before | DRM_PANEL_XIAOMI_C3F | \nconfig DRM_PANEL_XIAOMI_C3F\n\ttristate "Xiaomi c3f 720x1640 DSI video mode panel"\n\tdepends on OF\n\tdepends on DRM_MIPI_DSI\n\thelp\n\t  Say Y here if you want to enable support for the c3f 4-lane\n\t  720x1640 MIPI DSI video mode panel, as fitted to the Xiaomi\n\t  Redmi 14C 5G and POCO M7 5G (Qualcomm SM4450). Brightness is\n\t  a 12-bit DCS 0x51 write, handled by the panel itself.\n
+
+drivers/input/touchscreen/edt-ft5x06.c | \.compatible = "focaltech,ft8719" | after | focaltech,ft8726 | \t{ .compatible = "focaltech,ft8726", .data = &edt_ft8719_data },
