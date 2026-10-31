@@ -260,3 +260,11 @@ CONFIG_SCHED_DEBUG=y
 CONFIG_FTRACE=y
 CONFIG_KALLSYMS=y
 CONFIG_PRINTK_TIME=y
+
+# ---- boot handover (see arch/arm64/kernel/handover.c, tools/shim.S)
+# Both of these are load bearing, not tuning: without the hook the kernel never
+# sees ABL's androidboot.* tags or the address of the ROM's first stage init
+# ramdisk, and with INITRD off it could not load that ramdisk if it did. CI
+# asserts both are still y after olddefconfig.
+CONFIG_ARM64_HANDOVER_CMDLINE=y
+CONFIG_BLK_DEV_INITRD=y
