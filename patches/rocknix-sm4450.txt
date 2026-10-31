@@ -18,7 +18,8 @@
 0050-drm-panel-add-focaltech-ft7131m.patch
 
 # --- interconnect (nothing works without it: dpu, ufs, geniqos, gpu)
-0006-interconnect-qcom-add-sm4450.patch
+# 0006 is in patches/local/, re-based: its Kconfig/Makefile context assumes
+# the shikra (SM4650) NoC lines that stock 7.1.2 does not carry.
 
 # --- power domains / PMIC
 0002-pmdomain-qcom-rpmhpd-add-lcx-for-sm4450.patch
@@ -30,7 +31,7 @@
 0060-leds-qcom-lpg-support-inversed-pwm-polarity.patch
 
 # --- remoteproc (ADSP / WPSS) and SoC glue
-0003-remoteproc-qcom-pas-add-sm4450-adsp-wpss.patch
+# 0003 is in patches/local/, re-based (same shikra-context problem).
 0057-bato-arm64-dts-qcom-sm4450-add-cpu-capacity-and-power-coefficients.patch
 
 # --- PHYs: USB3/DP combo, UFS

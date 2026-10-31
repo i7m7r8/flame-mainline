@@ -94,36 +94,59 @@ jobs:
           rep="$GITHUB_WORKSPACE/out/patch-report.txt"
           : > "$rep"
           applied=0
+          already=0
           rejected=0
+
+          # Dry run first: a half-applied patch breaks every later one. -N makes
+          # "already in the tree" an exit-1 case, which is not a failure - as
+          # upstream absorbs the SM4450 series these will drop out by them-
+          # selves. Only context that genuinely does not match is a reject.
+          apply() {
+            local out rc
+            out=$(patch -p1 -N -f --dry-run -i "$1" 2>&1)
+            rc=$?
+            if [ "$rc" -ne 0 ]; then
+              if printf '%s\n' "$out" | grep -qE 'Reversed \(or previously applied\)|Skipping patch'; then
+                echo "already   $2" >> "$rep"
+                already=$((already+1))
+              else
+                printf 'REJECT    %s\n%s\n' "$2" "$out" | tee -a "$rep"
+                rejected=$((rejected+1))
+              fi
+              return 0
+            fi
+            if patch -p1 -N -f -i "$1" >/dev/null 2>&1; then
+              echo "ok        $2" >> "$rep"
+              applied=$((applied+1))
+            else
+              echo "REJECT    $2 (failed while applying)" | tee -a "$rep"
+              rejected=$((rejected+1))
+            fi
+          }
+
           while read -r p; do
             case "$p" in ''|'#'*) continue ;; esac
             if [ ! -f "$PATCHDIR/$p" ]; then
               echo "MISSING   $p" | tee -a "$rep"
               rejected=$((rejected+1)); continue
             fi
-            # dry run first: a half-applied patch breaks every later one
-            if patch -p1 -N -f --dry-run -i "$PATCHDIR/$p" >/dev/null 2>&1 &&
-               patch -p1 -N -f -i "$PATCHDIR/$p" >/dev/null 2>&1; then
-              echo "ok        $p" >> "$rep"
-              applied=$((applied+1))
-            else
-              echo "REJECT    $p" | tee -a "$rep"
-              rejected=$((rejected+1))
-            fi
+            apply "$PATCHDIR/$p" "$p"
           done < "$GITHUB_WORKSPACE/patches/rocknix-sm4450.txt"
+
           for p in "$GITHUB_WORKSPACE"/patches/local/*.patch; do
             [ -e "$p" ] || continue
-            if patch -p1 -N -f --dry-run -i "$p" >/dev/null 2>&1 &&
-               patch -p1 -N -f -i "$p" >/dev/null 2>&1; then
-              echo "ok        local/$(basename "$p")" >> "$rep"
-            else
-              echo "REJECT    local/$(basename "$p")" | tee -a "$rep"
-              rejected=$((rejected+1))
-            fi
+            apply "$p" "local/$(basename "$p")"
           done
-          echo "applied=$applied rejected=$rejected" | tee -a "$rep"
+
+          echo "applied=$applied already=$already rejected=$rejected" | tee -a "$rep"
           find . -name '*.rej' -print > "$GITHUB_WORKSPACE/out/rejects.txt" || true
           test "$rejected" -eq 0   # P0 gate: see patch-report.txt / rejects.txt
+
+      - name: Install local drivers
+        run: |
+          set -euo pipefail
+          python3 "$GITHUB_WORKSPACE/tools/install_local.py" \
+            "$SRC" "$GITHUB_WORKSPACE/patches/local"
 
       - name: Install flame board DTS
         run: |
