@@ -1,0 +1,19 @@
+/dts-v1/;
+/*
+ * Stands in for the tree ABL assembles from the *vendor* dtb and hands to the
+ * kernel in x0. run.sh passes it to qemu as -dtb, so whatever the shim finds in
+ * x0 is this file: it carries the androidboot.* tags init and fstab need, and
+ * nothing else in the payload does.
+ */
+/ {
+	#address-cells = <2>;
+	#size-cells = <2>;
+	compatible = "qcom,ravelin";
+	chosen {
+		bootargs = "androidboot.slot_suffix=_a androidboot.bootdevice=1d84000.ufshc androidboot.vbmeta.device=PARTUUID=ab12 SM4450ABL";
+	};
+	memory@40000000 {
+		device_type = "memory";
+		reg = <0x0 0x40000000 0x0 0x100000>;
+	};
+};
