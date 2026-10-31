@@ -1385,43 +1385,19 @@
 			};
 
 			panel: panel@0 {
-				compatible = "xiaomi,m19-36-02-0a-fhd-dsc";
+				compatible = "xiaomi,c3f-720x1640-video";
 				reg = <0>;
 
 				vddio-supply = <&display_panel_vddio>;
-				extvdd-supply = <&display_panel_extvdd>;
-				avdd-supply = <&display_panel_avdd>;
+				lab-supply = <&display_panel_avdd>;
 				ibb-supply = <&display_panel_ibb>;
+				extdvdd-supply = <&display_panel_extvdd>;
 
 				reset-gpios = <&tlmm 92 GPIO_ACTIVE_LOW>;
 				pinctrl-0 = <&panel_reset_default>;
 				pinctrl-names = "default";
 
-				rotation = <90>;
-
-				qcom,mdss-dsi-video-mode;
-				qcom,mdss-dsi-panel-width = <1080>;
-				qcom,mdss-dsi-panel-height = <2460>;
-				qcom,mdss-dsi-h-front-porch = <59>;
-				qcom,mdss-dsi-h-back-porch = <60>;
-				qcom,mdss-dsi-h-pulse-width = <12>;
-				qcom,mdss-dsi-h-sync-skew = <0>;
-				qcom,mdss-dsi-v-front-porch = <54>;
-				qcom,mdss-dsi-v-back-porch = <10>;
-				qcom,mdss-dsi-v-pulse-width = <10>;
-				qcom,mdss-dsi-panel-framerate = <90>;
-				qcom,mdss-dsi-t-clk-post = <0x0f>;
-				qcom,mdss-dsi-t-clk-pre = <0x1d>;
-
-				/* DSC: 8 bpp, 8 bpc, 2 slices per packet, 540x20 slices */
-				qcom,mdss-dsc-version = <0x11>;
-				qcom,mdss-dsc-scr-version = <0x0>;
-				qcom,mdss-dsc-bit-per-component = <8>;
-				qcom,mdss-dsc-bit-per-pixel = <8>;
-				qcom,mdss-dsc-block-prediction-enable;
-				qcom,mdss-dsc-slice-per-pkt = <2>;
-				qcom,mdss-dsc-slice-width = <540>;
-				qcom,mdss-dsc-slice-height = <20>;
+				rotation = <0>;
 
 				port {
 					panel_in: endpoint {
@@ -1614,6 +1590,13 @@
 		function = "gpio";
 		drive-strength = <8>;
 		bias-disable;
+	};
+
+	touch_default: touch-default-state {
+		pins = "gpio12", "gpio13";
+		function = "gpio";
+		drive-strength = <8>;
+		bias-pull-up;
 	};
 
 	wcd_default: wcd-default-state {
@@ -1880,8 +1863,23 @@
 		#size-cells = <0>;
 		status = "okay";
 
-/* sky: touch is on SPI, see spi@a84000 below */
-			
+		/* vendor: focaltech@38 on qcom,qupv3_0's i2c@984000, ic-type
+		 * 0x8726081c -> FT8726, 10 touch points, irq gpio13 falling,
+		 * reset gpio12. */
+		touchscreen@38 {
+			compatible = "focaltech,ft8726";
+			reg = <0x38>;
+
+			interrupt-parent = <&tlmm>;
+			interrupts = <13 IRQ_TYPE_EDGE_FALLING>;
+			reset-gpios = <&tlmm 12 GPIO_ACTIVE_LOW>;
+
+			touchscreen-size-x = <1080>;
+			touchscreen-size-y = <2408>;
+
+			pinctrl-0 = <&touch_default>;
+			pinctrl-names = "default";
+		};
 	};
 
 	/*
@@ -3089,75 +3087,6 @@
 			console-size = <0x100000>;
 			pmsg-size = <0x40000>;
 			no-map;
-		};
-	};
-};
-
-/*
- * Touch: Novatek NVT on SPI (vendor: spi@a84000, SE1 of QUPv3 wrapper 1).
- * Reset GPIO12, IRQ GPIO13, 1080x2460. Kept out of the geniqup wrapper for
- * now so that the skeleton stays readable; move it under qupv3_id_0 later.
- */
-&soc {
-	spi_touch: spi@a84000 {
-		compatible = "qcom,geni-spi";
-		reg = <0x0 0x00a84000 0x0 0x4000>;
-		clocks = <&gcc GCC_QUPV3_WRAP1_S1_CLK>;
-		clock-names = "se";
-		interrupts = <GIC_SPI 602 IRQ_TYPE_LEVEL_HIGH>;
-		pinctrl-0 = <&qup_spi1_default>;
-		pinctrl-names = "default";
-		#address-cells = <1>;
-		#size-cells = <0>;
-		status = "disabled"; /* enable once a driver exists */
-
-		touchscreen@0 {
-			compatible = "novatek,nvt-ts-spi";
-			reg = <0>;
-			spi-max-frequency = <9600000>;
-			interrupt-parent = <&tlmm>;
-			interrupts = <13 IRQ_TYPE_EDGE_FALLING>;
-			reset-gpios = <&tlmm 12 GPIO_ACTIVE_LOW>;
-			touchscreen-size-x = <1080>;
-			touchscreen-size-y = <2460>;
-		};
-	};
-};
-
-&tlmm {
-	panel_reset_default_sky: panel-reset-default-state {
-		pins = "gpio92";
-		function = "gpio";
-		drive-strength = <8>;
-		bias-disable;
-		output-high;
-	};
-
-	qup_spi1_default: qup-spi1-default-state {
-		mosi-pins {
-			pins = "gpio8";
-			function = "qup1_se1";
-			drive-strength = <6>;
-			bias-disable;
-		};
-		miso-pins {
-			pins = "gpio9";
-			function = "qup1_se1";
-			drive-strength = <6>;
-			bias-disable;
-		};
-		clk-pins {
-			pins = "gpio10";
-			function = "qup1_se1";
-			drive-strength = <6>;
-			bias-disable;
-		};
-		cs-pins {
-			pins = "gpio11";
-			function = "qup1_se1";
-			drive-strength = <2>;
-			bias-disable;
-			output-high;
 		};
 	};
 };
