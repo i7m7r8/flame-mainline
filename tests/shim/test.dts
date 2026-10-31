@@ -6,4 +6,17 @@
 	marker {
 		value = <0x1234>;
 	};
+
+	/* The same node the board DTS carries, at the address run.sh packs with:
+	 * mklinuxpayload.py refuses a --scratch-load this tree does not name, so
+	 * the test has to agree with itself the way the real payload does. */
+	reserved-memory {
+		#address-cells = <2>;
+		#size-cells = <2>;
+		ranges;
+
+		handover_mem: handover@43000000 {
+			reg = <0x0 0x43000000 0x0 0x200000>;
+		};
+	};
 };

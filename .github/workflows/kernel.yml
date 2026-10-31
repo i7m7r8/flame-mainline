@@ -186,6 +186,16 @@ jobs:
           ./scripts/kconfig/merge_config.sh -m .config \
             "$GITHUB_WORKSPACE/config/flame.fragment"
           make ARCH=$ARCH CROSS_COMPILE=$CROSS_COMPILE olddefconfig
+          # These two are not tuning. Without the hook the kernel never reads
+          # what the shim parked, so the androidboot.* tags and the address of
+          # the ROM's first stage init are gone; without the initrd support
+          # there is nothing to mount /vendor with. olddefconfig drops a symbol
+          # whose dependencies are not met, which is exactly how this would
+          # break quietly.
+          for sym in ARM64_HANDOVER_CMDLINE BLK_DEV_INITRD; do
+            grep -qx "CONFIG_$sym=y" .config || {
+              echo "CONFIG_$sym is not y in .config" >&2; exit 1; }
+          done
           cp .config "$GITHUB_WORKSPACE/out/flame.config"
 
       - name: Build Image and dtbs
@@ -222,6 +232,8 @@ jobs:
           # everything cmdline related arrives through the device tree.
           python3 "$GITHUB_WORKSPACE/tools/mklinuxpayload.py" \
             --image Image --dtb sm4450-xiaomi-flame.dtb \
+            --image-load 0xC0000000 --dtb-load 0xBFE00000 \
+            --scratch-load 0xBC000000 \
             --cc-prefix "$CROSS_COMPILE" \
             -o payload.bin
           python3 "$GITHUB_WORKSPACE/tools/mkbootimg_v4.py" \
@@ -231,14 +243,26 @@ jobs:
           import struct
           d = open('payload.bin', 'rb').read()
           (magic, ver, flags, ioff, isz, doff, dsz,
-           iload, dload, eoff, soff, hoff, rfu) = struct.unpack('<8sIIIIIIQQIIII', d[:64])
-          assert magic == b'SWEETLNX' and ver == 1, magic
+           iload, dload, eoff, soff, hoff, rfu, sload) = \
+              struct.unpack('<8sIIIIIIQQIIIIQ', d[:72])
+          assert magic == b'SWEETLNX' and ver == 2, (magic, ver)
           assert d[ioff:ioff + isz] == open('Image', 'rb').read(), 'image mismatch'
           assert d[doff:doff + dsz] == open('sm4450-xiaomi-flame.dtb', 'rb').read(), 'dtb mismatch'
+          assert soff == hoff + 4096, 'the shim does not follow its own header page'
+          # The handover region is where the shim parks the bootloader's tree and
+          # where arch/arm64/kernel/handover.c looks: 0xbc000000..0xbe000000,
+          # reserved without no-map in the board DTS. Neither destination may
+          # fall in it, and the payload says so explicitly rather than by
+          # comment, because the DTS and this header are edited separately.
+          assert sload == 0xBC000000, hex(sload)
+          for base, size, name in ((iload, isz, 'image'), (dload, dsz, 'dtb')):
+              assert base + size <= sload or sload + 0x200000 <= base, \
+                     f'{name} overlaps the handover region'
           print(f'payload {len(d)} bytes  abi={ver} flags={flags:#x}')
           print(f'  image +{ioff:#08x} len {isz:#x} -> {iload:#010x}')
           print(f'  dtb   +{doff:#08x} len {dsz:#x} -> {dload:#010x}')
           print(f'  entry +{eoff:#06x}  shim +{soff:#06x}  hdr +{hoff:#06x}')
+          print(f'  handover {sload:#010x}+0x200000')
           PY
           cp "$GITHUB_WORKSPACE/flash-boot.txt" FLASH.txt
           cp "$GITHUB_WORKSPACE/boot-safety.txt" BOOT-SAFETY.txt
