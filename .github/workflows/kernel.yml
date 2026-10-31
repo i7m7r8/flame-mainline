@@ -82,7 +82,8 @@ jobs:
             "https://github.com/ROCKNIX/distribution" -b "$ROCKNIX_REF" rocknix
           git -C rocknix sparse-checkout set \
             projects/ROCKNIX/devices/SM4450/patches/linux
-          echo "PATCHDIR=$GITHUB_WORKSPACE/rocknix/projects/ROCKNIX/devices/SM4450/patches/linux" >> "$GITHUB_ENV"
+          PATCHDIR="$GITHUB_WORKSPACE/rocknix/projects/ROCKNIX/devices/SM4450/patches/linux"
+          echo "PATCHDIR=$PATCHDIR" >> "$GITHUB_ENV"
           ls "$PATCHDIR" | wc -l
 
       - name: Apply patch series
