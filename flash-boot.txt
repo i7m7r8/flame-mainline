@@ -1,0 +1,47 @@
+flame mainline boot image - how to flash
+=========================================
+
+Artifact: flame-mainline-boot.img
+  Android boot image header v4, os_version Android 17 (matching the ROM's own
+  boot.img), page 4096, no ramdisk, empty header cmdline. The kernel section is
+  the mainline arm64 Image plus sm4450-xiaomi-flame.dtb plus the EL1 handover
+  shim; the shim takes the DTB the bootloader built from the vendor tree out of
+  x0 and puts our board DTB there instead. See tools/shim.S and
+  docs/mainline-port.md.
+
+Nothing else is replaced: vendor_boot, dtbo, vbmeta, super and the bootloader
+partitions keep the ROM's own content.
+
+1. Find the slot the ROM lives in, from a working Android shell:
+
+     adb shell getprop ro.boot.slot_suffix        # _a or _b
+
+   or from fastboot:
+
+     fastboot get_staged_frac; fastboot getvar active-slot   # builds that answer
+
+2. Back up what is there now (this is the whole restore procedure):
+
+     adb shell "su -c 'cp /dev/block/by-name/boot$(getprop ro.boot.slot_suffix) /sdcard/boot-stock.img'"
+
+   stock/boot.img in the ROM package is byte-identical, so the ROM zip alone is
+   also a valid restore.
+
+3. Flash once, and only to that slot:
+
+     fastboot flash boot_a flame-mainline-boot.img      # if suffix is _a
+     fastboot flash boot_b flame-mainline-boot.img      # if suffix is _b
+     fastboot --set-active=<same slot>
+     fastboot reboot
+
+4. If it does not come up, hold Power+VolDown until fastboot and restore:
+
+     fastboot flash boot_<slot> stock/boot.img
+     fastboot reboot
+
+   The image either boots or sits in the shim's halt loop; it cannot write to
+   anything, so there is no state to undo. See BOOT-SAFETY.txt.
+
+First board bring-up is much easier with a console: the debug UART is the GenI
+QUP at 0xa88000, 115200 8N1, and the bootargs in the DTB ask for it. Pinout and
+level notes are in docs/hardware-flame.md.

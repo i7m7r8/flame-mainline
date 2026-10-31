@@ -23,6 +23,8 @@ on:
       - 'dts/**'
       - 'patches/**'
       - 'config/flame.fragment'
+      - 'tools/**'
+      - 'tests/**'
       - '.github/workflows/kernel.yml'
 
 env:
@@ -57,7 +59,14 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             bc bison flex libelf-dev libssl-dev cpio rsync xz-utils \
             device-tree-compiler patch make gcc-aarch64-linux-gnu \
+            binutils-aarch64-linux-gnu qemu-system-arm \
             kmod python3
+
+      # A few seconds, and it is the only thing standing between a green build
+      # and a boot image that dies before primary_entry, so run it before the
+      # 20 minute kernel build rather than after.
+      - name: Self-test handover shim
+        run: tests/shim/run.sh
 
       - name: Cache source tarball
         uses: actions/cache@v4
@@ -198,12 +207,44 @@ jobs:
           cd "$GITHUB_WORKSPACE/out"
           cp "$SRC/arch/arm64/boot/Image" Image
           cp "$SRC/arch/arm64/boot/dts/qcom/sm4450-xiaomi-flame.dtb" .
-          grep -E '^(CONFIG_(DRM_MSM|INTERCONNECT_QCOM_SM4450|SM_GCC_4450|SM_DISPCC_4450|SM_GPUCC_4450|SM_CAMCC_4450|PINCTRL_SM4450|MMC_SDHCI_MSM|SCSI_UFS_QCOM|USB_DWC3_QCOM|PHY_QCOM.*|ATH10K.*|BT_QCA|SND_SOC.*|QCOM_GPI_DMA|TOUCHSCREEN.*|REGULATOR_QCOM.*|IOMMU.*|QCOM_PMIC_GLINK|UCSI_GLINK|QCOM_BATTMGR))=' \
+          grep -E '^(CONFIG_(DRM_MSM|INTERCONNECT_QCOM_SM4450|SM_GCC_4450|SM_DISPCC_4450|SM_GPUCC_4450|SM_CAMCC_4450|PINCTRL_SM4450|MMC_SDHCI_MSM|SCSI_UFS_QCOM|USB_DWC3_QCOM|PHY_QCOM.*|ATH10K.*|BT_QCA|SND_SOC.*|QCOM_GPI_DMA|TOUCHSCREEN.*|REGULATOR_QCOM.*|IOMMU.*|QCOM_PMIC_GLINK|UCSI_GLINK|QCOM_BATTMGR|QCOM_SOCINFO))=' \
             flame.config > enabled.txt || true
           dtc -I dtb -O dts sm4450-xiaomi-flame.dtb > sm4450-xiaomi-flame.cdt.dts 2>/dev/null
-          sha256sum Image sm4450-xiaomi-flame.dtb > SHA256SUMS
-          cp "$GITHUB_WORKSPACE/boot-safety.txt" BOOT-SAFETY.txt
           ls -lh
+          cat enabled.txt
+
+      - name: Pack boot image
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE/out"
+          # header v4 with the stock os_version (Android 17, 2026-10 patch
+          # level) and an empty cmdline, exactly like the ROM's own boot.img:
+          # everything cmdline related arrives through the device tree.
+          python3 "$GITHUB_WORKSPACE/tools/mklinuxpayload.py" \
+            --image Image --dtb sm4450-xiaomi-flame.dtb \
+            --cc-prefix "$CROSS_COMPILE" \
+            -o payload.bin
+          python3 "$GITHUB_WORKSPACE/tools/mkbootimg_v4.py" \
+            --kernel payload.bin --android 17 --patch-level 2026-10 \
+            -o flame-mainline-boot.img
+          python3 - <<'PY' | tee packing.txt
+          import struct
+          d = open('payload.bin', 'rb').read()
+          (magic, ver, flags, ioff, isz, doff, dsz,
+           iload, dload, eoff, soff, hoff, rfu) = struct.unpack('<8sIIIIIIQQIIII', d[:64])
+          assert magic == b'SWEETLNX' and ver == 1, magic
+          assert d[ioff:ioff + isz] == open('Image', 'rb').read(), 'image mismatch'
+          assert d[doff:doff + dsz] == open('sm4450-xiaomi-flame.dtb', 'rb').read(), 'dtb mismatch'
+          print(f'payload {len(d)} bytes  abi={ver} flags={flags:#x}')
+          print(f'  image +{ioff:#08x} len {isz:#x} -> {iload:#010x}')
+          print(f'  dtb   +{doff:#08x} len {dsz:#x} -> {dload:#010x}')
+          print(f'  entry +{eoff:#06x}  shim +{soff:#06x}  hdr +{hoff:#06x}')
+          PY
+          cp "$GITHUB_WORKSPACE/flash-boot.txt" FLASH.txt
+          cp "$GITHUB_WORKSPACE/boot-safety.txt" BOOT-SAFETY.txt
+          sha256sum Image sm4450-xiaomi-flame.dtb payload.bin \
+            flame-mainline-boot.img > SHA256SUMS
+          ls -lh flame-mainline-boot.img payload.bin
           cat SHA256SUMS
 
       - name: Upload artifacts

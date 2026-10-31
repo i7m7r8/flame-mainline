@@ -1,37 +1,40 @@
-flame Debian 13 dual boot - safety notes
-========================================
+flame mainline boot - safety notes
+==================================
 
-Android 17 lives in slot a and is not touched. All writes go to slot b:
+Scope of every write: the boot partition of the slot that already holds
+Infinity X Android 17, and nothing else.
 
-  boot_b          flame-debian-boot_b.img   (stock kernel + flame initramfs)
-  vendor_boot_b   vendor_boot.img           (stock copy)
-  dtbo_b          dtbo.img                  (stock copy)
+  boot_<slot>     flame-mainline-boot.img   (mainline Image + flame DTB + shim)
 
-Never flash the bootloader partitions (abl, xbl, hyp, tz, devcfg, ...),
-vbmeta, or anything ending in _a. That is what keeps the device unbrickable.
+Never flashed, ever: abl, xbl, xbl_config, tz, hyp, devcfg, pmic, qupfw, aop,
+loaders, vbmeta, vbmeta_system, vendor_boot, dtbo, super, bootable recovery.
+vendor_boot, dtbo and super keep the ROM's own content, so init still finds the
+ROM's vendor ramdisk, DTBO, DLKMs, and the ROM's own AVB chain.
 
-Before flashing (from Android, root shell or adb root):
+Why this cannot brick the device:
+  - the Qualcomm loader partitions are the only thing that can be destroyed by
+    a bad flash, and they are never written;
+  - our boot image has no AVB hash descriptor of its own, so vbmeta still
+    describes the ROM's boot image - if that mismatch is a problem the ROM
+    simply does not boot, and flashing stock boot.img fixes it;
+  - the payload never writes to flash. If the shim ever gets confused it halts
+    in a `b .` loop with interrupts on, which is recoverable by holding
+    Power+VolDown until fastboot comes back.
 
-  dd if=/dev/block/by-name/boot_b of=/sdcard/boot_b-stock.img
-  dd if=/dev/block/by-name/vendor_boot_b of=/sdcard/vendor_boot_b-stock.img
-  dd if=/dev/block/by-name/dtbo_b of=/sdcard/dtbo_b-stock.img
+Restore, either of:
+  1. recovery (the ROM's own, in its own partition, unmodified):
+     install the Infinity X zip, or just its boot.img
+  2. fastboot:
+     fastboot flash boot_<slot> stock/boot.img      # byte-identical copy
+     fastboot reboot
 
-The ROM extracts in this folder (boot.img, vendor_boot.img, dtbo.img) are the
-same images and are enough to restore slot b byte for byte.
+Back up the slot before flashing, from a root shell:
+  cp /dev/block/by-name/boot$(getprop ro.boot.slot_suffix) /sdcard/boot-stock.img
 
-Switch slots from fastboot:
-
-  fastboot --set-active=a     Android 17 (slot a, untouched)
-  fastboot --set-active=b     Debian (slot b)
-
-Recovery is its own 100 MB partition and is never modified:
-
-  fastboot reboot recovery    (needs recovery-stock.img only if it was
-                               damaged by something else - not this process)
-
-The Debian boot never auto-reboots: if the rootfs card is missing or broken,
-the initramfs stays in a rescue shell on the USB serial gadget. Hold
-Power+VolUp/Power+VolDown to leave it and reach recovery/fastboot.
-
-If slot b refuses to boot after flashing, set slot a active again - no
-reflash is needed, Android was never modified.
+Two things are worth remembering about the earlier plan. Slot b used to hold
+Debian 13; that route was dropped, and the "never touch *_a" rule that came with
+it no longer applies - what applies now is "only boot_<slot the ROM lives in>".
+And the image is slot-agnostic on purpose: the handover shim hands the
+bootloader's own device tree to the kernel, whose bootargs carry
+androidboot.slot_suffix, so the same image works whichever slot it is flashed
+to.

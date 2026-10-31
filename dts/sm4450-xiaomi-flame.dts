@@ -178,7 +178,16 @@
 		#address-cells = <2>;
 		#size-cells = <2>;
 		ranges;
-		bootargs = "console=tty0 fbcon=nodefer loglevel=7 ignore_loglevel nokaslr clk_ignore_unused pd_ignore_unused console=ttyGS0";
+		bootargs = "console=ttyMSM0,115200n8 loglevel=7 log_buf_len=4M kpti=0 "
+			 "swiotlb=noforce cgroup.memory=nokmem,nosocket "
+			 "transparent_hugepage=never loop.max_part=7 "
+			 "rcupdate.rcu_expedited=1 clk_ignore_unused pd_ignore_unused "
+			 "androidboot.hardware=qcom androidboot.memcg=1 "
+			 "androidboot.serialconsole=0 "
+			 "androidboot.usbcontroller=a600000.dwc3 "
+			 "androidboot.load_modules_parallel=true "
+			 "androidboot.vendor.qspa=true "
+			 "androidboot.bootdevice=1d84000.ufshc";
 		stdout-path = "serial0:115200n8";
 
 		framebuffer: framebuffer@b8000000 {
@@ -499,6 +508,17 @@
 
 /* TODO trim after booting */
 &reserved_memory {
+	/* Handover scratch: the EL1 shim in our boot image copies the device
+	 * tree the bootloader built here and records where it put it, so
+	 * drivers/of/fdt.c can pull the bootloader's /chosen/bootargs (that is
+	 * where androidboot.slot_suffix and the AVB tags live) onto our command
+	 * line. no-map, because nothing else may own or move it.
+	 */
+	handover_mem: handover@bbf00000 {
+		reg = <0x0 0xbbf00000 0x0 0x200000>;
+		no-map;
+	};
+
 	hyp_mem: hyp@80000000 {
 		reg = <0x0 0x80000000 0x0 0x600000>;
 		no-map;

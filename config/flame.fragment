@@ -6,6 +6,11 @@
 CONFIG_ARCH_QCOM=y
 CONFIG_QCOM_SCM=y
 CONFIG_QCOM_SMEM=y
+# ROCKNIX 0045 puts qcom_serial_number in socinfo.c and reads it from ath10k
+# and btqca, both built in here. As a module its data symbol is not in vmlinux
+# and the link fails; it also has to be up before the wifi/bt firmware names
+# are derived, so built-in is what flame wants anyway.
+CONFIG_QCOM_SOCINFO=y
 CONFIG_QCOM_CMDDB=y
 CONFIG_QCOM_PDC=y
 CONFIG_QCOM_RPMH=y
