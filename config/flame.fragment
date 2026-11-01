@@ -301,15 +301,21 @@ CONFIG_PSTORE_PMSG=y
 # keeps that DRAM out of the page allocator, which is what the vendor's
 # subsystem firmware expects.
 CONFIG_PSTORE_BLK=y
+# "oops" is assumed, not measured: no shell reached here has ever listed this
+# device's partitions. It is the common name for the dump partition on Xiaomi
+# boards and the one flash-boot.txt reads back, and if it is wrong the cost is
+# the log only - pstore_blk.best_effort=1 on the kernel line means a missing
+# partition leaves the backend unregistered and the boot otherwise identical.
 CONFIG_PSTORE_BLK_BLKDEV="PARTLABEL=oops"
 # These are in KIBIBYTES (fs/pstore/blk.c check_size(): `name * 1024`), and the
-# 4096 in verify_size(name, 4096, ...) is a byte *alignment*, not a minimum - so
-# what 2 used to mean here. 256 is 256 KiB, which holds several times the whole
-# boot log and still fits the smallest plausible oops partition (register_pstore_zone
-# fails outright if the zones do not fit, so being modest costs nothing but
-# truncated records). console and pmsg stay 0: with a block backend every
-# console line would be a synchronous O_DSYNC write, which is not something a
-# phone boot should pay.
+# 4096 in verify_size(name, 4096, ...) is a byte *alignment*, not a minimum: a
+# value whose KiB number is not page-multiple gets replaced by ALIGN(kib, 4096)
+# read back as bytes, which is how KMSG_SIZE=2 became a 4096-byte zone.  256 is
+# 256 KiB, several times the whole boot log, and modest enough to fit any dump
+# partition - register_pstore_zone() fails outright when the zones do not fit,
+# and then nothing is recorded at all. console and pmsg stay 0: with a block
+# backend every console line would be a synchronous O_DSYNC write, which is not
+# something a phone boot should pay.
 CONFIG_PSTORE_BLK_KMSG_SIZE=256
 CONFIG_PSTORE_BLK_CONSOLE_SIZE=0
 CONFIG_PSTORE_BLK_PMSG_SIZE=0
@@ -780,6 +786,30 @@ CONFIG_NLS_CODEPAGE_437=y
 CONFIG_NLS_UTF8=y
 CONFIG_PM_WAKELOCKS=y
 CONFIG_PM_WAKELOCKS_LIMIT=0
+
+# ---- bpf, probes and the per-process knobs userspace reads
+# bpfloader installs cgroup/sk_msg programs and the LSM= line above ends in
+# `bpf`, which only exists as a hook with BPF_LSM; stock sets it, with
+# BPF_JIT_ALWAYS_ON and KPROBES.  ANON_VMA_NAME is what names the ART and
+# graphics regions in /proc/<pid>/maps, GPIO_CDEV_V1 is the char-device ABI the
+# shipped HALs were built against, SCHEDSTATS/LRU_GEN/BINFMT_MISC/IFB/
+# NET_REDIRECT are all in stock (binfmt_misc registrations, the old-anon LRU,
+# and the tc redirect offload netd installs).  Not settable here, so absent by
+# need rather than choice: DEBUG_INFO_BTF needs pahole in the runner,
+# KPROBES_ON_FTRACE needs DYNAMIC_FTRACE_WITH_REGS which arm64 does not have,
+# and SCHED_DEBUG / SCHED_THERMAL_PRESSURE became runtime sysctls upstream.
+CONFIG_ANON_VMA_NAME=y
+CONFIG_BINFMT_MISC=y
+CONFIG_BPF_JIT_ALWAYS_ON=y
+CONFIG_BPF_LSM=y
+CONFIG_GPIO_CDEV_V1=y
+CONFIG_IFB=y
+CONFIG_KPROBES=y
+CONFIG_LRU_GEN=y
+CONFIG_LRU_GEN_ENABLED=y
+CONFIG_LRU_GEN_WALKS_MMU=y
+CONFIG_NET_REDIRECT=y
+CONFIG_SCHEDSTATS=y
 
 # put the security= default on selinux, as stock does; this is a choice so it has
 # to be the last word on it in the file

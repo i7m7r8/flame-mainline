@@ -87,7 +87,7 @@ def main():
             sys.exit(f"{a.boot}: kernel section is empty, nothing to boot")
     else:
         kernel = open(a.payload, "rb").read()
-        os_version, cmdline = None, b""
+        os_version, cmdline = None, ""
 
     if a.rom_boot:
         _, ramdisk, rom_os_version, rom_cmdline = read_boot(a.rom_boot)
@@ -96,7 +96,7 @@ def main():
                      "is this the slot the ROM actually boots from?")
     else:
         ramdisk = open(a.rom_ramdisk, "rb").read()
-        rom_os_version, rom_cmdline = None, b""
+        rom_os_version, rom_cmdline = None, ""
     if not ramdisk:
         sys.exit("empty ramdisk")
 
@@ -135,7 +135,7 @@ def main():
     print(f"{a.out}: kernel {len(kernel)} ramdisk {len(ramdisk)} "
           f"android {android} patch {patch} -> {size} bytes")
     print(f"  /init is present: {len(ramdisk)} bytes of generic ramdisk attached")
-    print(f"  flash only to the slot the ROM boots from (see boot-safety.txt)")
+    print("  flash only to the slot the ROM boots from (see boot-safety.txt)")
 
 
 if __name__ == "__main__":

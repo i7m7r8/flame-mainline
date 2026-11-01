@@ -67,6 +67,16 @@ partitions keep the ROM's own content.
    Paste that; it is the boot log. Nothing else on the device survives this
    boot, so there is no second place to look.
 
+   pstore writes to whatever PARTLABEL the config names, and "oops" is the name
+   this build assumes. If that dd reads nothing, send the real partition list
+   and the size of the candidates, and the next build points at one of them:
+
+     ls /dev/block/by-name/ | tr '\n' ' '; echo
+     for p in oops dump logfs; do echo -n "$p: "; blockdev --getsize64 /dev/block/by-name/$p 2>/dev/null || echo absent; done
+
+   A wrong label is not a boot problem: pstore_blk is configured best_effort, so
+   a missing partition means no log and nothing else changes.
+
 First board bring-up is much easier with a console: the debug UART is the GenI
 QUP at 0xa88000, 115200 8N1, and the bootargs in the DTB ask for it. Pinout and
 level notes are in docs/hardware-flame.md.
