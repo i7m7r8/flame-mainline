@@ -185,7 +185,7 @@
 		 * the only thing the kernel sees before ABL's androidboot.* tags
 		 * are appended by the handover hook. Keep it under ~1.5 KiB:
 		 * COMMAND_LINE_SIZE is 2048 and those tags have to fit too. */
-		bootargs = "console=ttyMSM0,115200n8 loglevel=7 log_buf_len=4M kpti=0 swiotlb=noforce cgroup.memory=nokmem,nosocket transparent_hugepage=never loop.max_part=7 rcupdate.rcu_expedited=1 clk_ignore_unused pd_ignore_unused androidboot.hardware=qcom androidboot.memcg=1 androidboot.serialconsole=0 androidboot.usbcontroller=a600000.dwc3 androidboot.load_modules_parallel=true androidboot.vendor.qspa=true androidboot.bootdevice=1d84000.ufshc";
+		bootargs = "console=ttyMSM0,115200n8 loglevel=7 log_buf_len=4M kpti=0 swiotlb=noforce cgroup.memory=nokmem,nosocket transparent_hugepage=never loop.max_part=7 rcupdate.rcu_expedited=1 clk_ignore_unused pd_ignore_unused androidboot.hardware=qcom androidboot.memcg=1 androidboot.serialconsole=0 androidboot.usbcontroller=a600000.dwc3 androidboot.load_modules_parallel=true androidboot.vendor.qspa=true androidboot.bootdevice=1d84000.ufshc qcom_ice.use_wrapped_keys=1";
 		stdout-path = "serial0:115200n8";
 
 		framebuffer: framebuffer@b8000000 {
@@ -913,7 +913,33 @@
 		vccq2-supply = <&vreg_l19b_1p8>;
 		vccq2-max-microamp = <750000>;
 
+		qcom,ice = <&ice_ufs_mem>;
+
 		status = "okay";
+	};
+
+	/*
+	 * Inline crypto, at the range the vendor tree's UFS host gives to its
+	 * second reg entry (0x1d88000+0x18000) and on the clock it calls
+	 * core_clk_ice (GCC index 110, which is 0x6e there). Upstream sm8550
+	 * describes the same block as its own node rather than as a second
+	 * range on the host, and that is the shape this driver's
+	 * devm_of_qcom_ice_get() prefers; the clock ends up enabled here as the
+	 * node's single unnamed clock.
+	 *
+	 * Whether it can actually decrypt this ROM's /data depends on the
+	 * firmware, not on the tree: the driver reads the ICE version out of
+	 * hardware and only uses the hardware key manager if TrustZone answers
+	 * the four wrapped-key SCM calls. The vendor tree asks for HWKM
+	 * (qcom,ice-use-hwkm), so the kernel command line asks for it too; if
+	 * the console says "A supported HWKM is not present" then this device
+	 * stores raw keys instead and that parameter has to go.
+	 */
+	ice_ufs_mem: crypto@1d88000 {
+		compatible = "qcom,sm4450-inline-crypto-engine",
+			     "qcom,inline-crypto-engine";
+		reg = <0x0 0x01d88000 0x0 0x18000>;
+		clocks = <&gcc GCC_UFS_PHY_ICE_CORE_CLK>;
 	};
 
 	ufs_mem_phy: phy@1d87000 {
