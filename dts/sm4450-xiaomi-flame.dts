@@ -422,12 +422,29 @@
 			regulator-max-microvolt = <3300000>;
 			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
 		};
-		vreg_pbs_sd: pbs_sd {
-			regulator-name = "vreg_pbs_sd";
+		/*
+		 * The microSD's two rails. The vendor tree's sdhc2 fragment asks
+		 * for a fixed 2.96 V core (vdd) and a switchable 1.8/2.95 V IO
+		 * (vdd-io), which is l24 and l28 here: 2.7-3.544 and 1.62-3.3.
+		 * They used to be described as pbs_sd/pbs_px2, the two PBS
+		 * trigger resources that sequence them, but a PBS regulator has
+		 * no voltage ranges at all (pmic5_pbs: enable voting only), so
+		 * the MMC core would have had a supply it could turn on and
+		 * never set. Patch 0060 makes these two ldo nodes issue the PBS
+		 * vote themselves (vrm.sd, vrm.px2), so nothing here needs to
+		 * name the triggers.
+		 */
+		vreg_l24b_2p96: ldo24 {
+			regulator-name = "vreg_l24b_2p96";
+			regulator-min-microvolt = <2700000>;
+			regulator-max-microvolt = <3544000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
 		};
-
-		vreg_pbs_px2: pbs_px2 {
-			regulator-name = "vreg_pbs_px2";
+		vreg_l28b_1p8: ldo28 {
+			regulator-name = "vreg_l28b_1p8";
+			regulator-min-microvolt = <1620000>;
+			regulator-max-microvolt = <3300000>;
+			regulator-initial-mode = <RPMH_REGULATOR_MODE_HPM>;
 		};
 	};
 
@@ -1029,11 +1046,12 @@
 		power-domains = <&rpmhpd RPMHPD_CX>;
 		pinctrl-0 = <&sdc2_default>;
 		pinctrl-names = "default";
-		vmmc-supply = <&vreg_pbs_sd>;
-		vqmmc-supply = <&vreg_pbs_px2>;
+		vmmc-supply = <&vreg_l24b_2p96>;
+		vqmmc-supply = <&vreg_l28b_1p8>;
 		bus-width = <4>;
 		cd-gpios = <&tlmm 101 GPIO_ACTIVE_LOW>;
 		no-sdio;
+		no-mmc;
 		status = "okay";
 	};
 
