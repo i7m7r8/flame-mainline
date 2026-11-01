@@ -598,7 +598,7 @@
 	};
 
 	wlan_msa_mem: wlan-msa@82a00000 {
-		reg = <0x0 0x82a00000 0x0 0x300000>;
+		reg = <0x0 0x82a00000 0x0 0xc00000>;
 		no-map;
 	};
 
@@ -622,25 +622,25 @@
 		no-map;
 	};
 
-	ipa_fw_mem: ipa-fw@89400000 {
-		reg = <0x0 0x89400000 0x0 0x10000>;
+	ipa_fw_mem: ipa-fw@89c00000 {
+		reg = <0x0 0x89c00000 0x0 0x10000>;
 		no-map;
 	};
 
-	ipa_gsi_mem: ipa-gsi@89410000 {
-		reg = <0x0 0x89410000 0x0 0xa000>;
+	ipa_gsi_mem: ipa-gsi@89c10000 {
+		reg = <0x0 0x89c10000 0x0 0xa000>;
 		no-map;
 	};
 
-	gpu_microcode_mem: gpu-microcode@8941a000 {
-		reg = <0x0 0x8941a000 0x0 0x2000>;
+	gpu_microcode_mem: gpu-microcode@89c1a000 {
+		reg = <0x0 0x89c1a000 0x0 0x2000>;
 		no-map;
 	};
 
 
 
 	mpss_mem: mpss@8a000000 {
-		reg = <0x0 0x8a000000 0x0 0xd700000>;
+		reg = <0x0 0x8a000000 0x0 0xda00000>;
 		no-map;
 	};
 
@@ -664,8 +664,8 @@
 		no-map;
 	};
 
-	trust_ui_vm_mem: trust-ui-vm@e0b00000 {
-		reg = <0x0 0xe0b00000 0x0 0x4af3000>;
+	trust_ui_vm_mem: trust-ui-vm@e0c00000 {
+		reg = <0x0 0xe0c00000 0x0 0x49f3000>;
 		no-map;
 	};
 
@@ -3146,22 +3146,32 @@
 		regulator-boot-on;
 	};
 
-	/* pstore across resets (vendor: ramoops@97700000) */
+	/* pstore across resets, at the address this device's vendor tree uses.
+	 * The one inherited from sky, 0x97700000, falls inside flame's modem
+	 * image region, so the console log would have been written over the
+	 * modem firmware; the three sizes are the vendor's split too. */
 	reserved-memory {
-		ramoops_region: ramoops@97700000 {
+		ramoops_region: ramoops@80d00000 {
 			compatible = "ramoops";
-			reg = <0x0 0x97700000 0x0 0x200000>;
-			record-size = <0x20000>;
-			console-size = <0x100000>;
-			pmsg-size = <0x40000>;
+			reg = <0x0 0x80d00000 0x0 0x200000>;
+			record-size = <0x40000>;
+			console-size = <0x80000>;
+			pmsg-size = <0x100000>;
 			no-map;
 		};
 	};
 };
 
-/* mainline's sm4450.dtsi expects the bootloader to fill /memory in; the shim
- * passes the DTB as-is, so provide the low bank here (M1 placeholder: first
- * region of sky's vendor /memory, see docs/C-sky-hw-params.md section 2). */
+/* sm4450.dtsi leaves /memory to the bootloader ("We expect the bootloader to
+ * fill in the size"), and ABL does fill it in - but only in the tree it builds
+ * for the vendor kernel, which the shim swaps out for ours. So the size has to
+ * be stated here. It is not measured yet, and until it is this is deliberately
+ * the smallest region that is certainly RAM: every carveout in the vendor tree
+ * ends by 0xfa480000, and nothing here goes past that, because under-declaring
+ * costs memory while over-declaring hands the page allocator addresses that
+ * are not memory at all. A 4 GB part also needs a second region above
+ * 0x100000000; the vendor's alloc-ranges reaching 0x1_00000000 says one exists,
+ * but no offline source says where it ends. */
 / {
 	/delete-node/ memory@a0000000;
 
