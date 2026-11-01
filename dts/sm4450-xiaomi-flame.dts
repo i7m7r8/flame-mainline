@@ -184,8 +184,13 @@
 		 * The boot image header carries an empty cmdline, so this line is
 		 * the only thing the kernel sees before ABL's androidboot.* tags
 		 * are appended by the handover hook. Keep it under ~1.5 KiB:
-		 * COMMAND_LINE_SIZE is 2048 and those tags have to fit too. */
-		bootargs = "console=ttyMSM0,115200n8 loglevel=7 log_buf_len=4M kpti=0 swiotlb=noforce cgroup.memory=nokmem,nosocket transparent_hugepage=never loop.max_part=7 rcupdate.rcu_expedited=1 clk_ignore_unused pd_ignore_unused androidboot.hardware=qcom androidboot.memcg=1 androidboot.serialconsole=0 androidboot.usbcontroller=a600000.dwc3 androidboot.load_modules_parallel=true androidboot.vendor.qspa=true androidboot.bootdevice=1d84000.ufshc qcom_ice.use_wrapped_keys=1 pstore_blk.best_effort=1 pstore.kmsg_bytes=262144 initcall_debug";
+		 * COMMAND_LINE_SIZE is 2048 and those tags have to fit too.
+		 *
+		 * fbcon=map:0 is what puts the boot log on the panel through the
+		 * framebuffer node below; see the FB_SIMPLE comment in
+		 * config/flame.fragment for why that is a log channel and not
+		 * cosmetics. */
+		bootargs = "console=ttyMSM0,115200n8 loglevel=7 log_buf_len=4M fbcon=map:0 kpti=0 swiotlb=noforce cgroup.memory=nokmem,nosocket transparent_hugepage=never loop.max_part=7 rcupdate.rcu_expedited=1 clk_ignore_unused pd_ignore_unused androidboot.hardware=qcom androidboot.memcg=1 androidboot.serialconsole=0 androidboot.usbcontroller=a600000.dwc3 androidboot.load_modules_parallel=true androidboot.vendor.qspa=true androidboot.bootdevice=1d84000.ufshc qcom_ice.use_wrapped_keys=1 pstore_blk.best_effort=1 pstore.kmsg_bytes=262144 initcall_debug";
 		stdout-path = "serial0:115200n8";
 
 		framebuffer: framebuffer@b8000000 {

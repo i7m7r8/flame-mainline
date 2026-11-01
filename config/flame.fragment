@@ -161,6 +161,21 @@ CONFIG_FB=y
 CONFIG_VT=y
 CONFIG_VT_CONSOLE=y
 CONFIG_FRAMEBUFFER_CONSOLE=y
+# The console on the splash the bootloader left on screen. dts declares the ABL
+# image region as both a reserved-memory node and a simple-framebuffer, and the
+# DPU is still scanning it out when we are handed control (clk_ignore_unused
+# keeps it that way), so FB_SIMPLE binds it and fbcon writes the boot log into
+# the picture the panel is already showing. This is not a pretty boot: it is
+# the only channel that needs no working USB, no pstore, no recovery and no
+# UART cable. If a boot fails with nothing on the screen at all, the kernel
+# never got this far and the fault is in the shim or below.
+CONFIG_FB_SIMPLE=y
+# A primary-console veto would read /chosen/stdout-path, which points at the
+# debug UART, and fbcon would then map the panel only if it were the primary
+# device. DRM_MSM selects DRM_CLIENT_SETUP, which selects
+# FRAMEBUFFER_CONSOLE_DETECT_PRIMARY, so that heuristic cannot be turned off
+# from a fragment - the fbcon=map:0 in the bootargs is what overrides it, and
+# the console goes to the first framebuffer regardless of what stdout-path says.
 CONFIG_LOGO=y
 CONFIG_SYNC_FILE=y
 CONFIG_UDMABUF=y
@@ -340,6 +355,18 @@ CONFIG_DEBUG_KERNEL=y
 CONFIG_FTRACE=y
 CONFIG_KALLSYMS=y
 CONFIG_PRINTK_TIME=y
+# A CPU stuck in a kernel loop is the other failure that looks like nothing: no
+# panic, no oops, no record, the panel frozen mid-line. Stock runs the same
+# detectors, and a hard lockup panicking is what turns it into a pstore record
+# and a reboot instead of a device that sits there until the battery dies. Soft
+# lockups still only complain: first stage can legitimately sit in one path for
+# minutes on a slow UFS, and panicking over that would break working boots.
+CONFIG_LOCKUP_DETECTOR=y
+CONFIG_SOFTLOCKUP_DETECTOR=y
+CONFIG_HARDLOCKUP_DETECTOR=y
+CONFIG_BOOTPARAM_HARDLOCKUP_PANIC=y
+CONFIG_DETECT_HUNG_TASK=y
+CONFIG_DEFAULT_HUNG_TASK_TIMEOUT=120
 
 # ---- boot handover (see arch/arm64/kernel/handover.c, tools/shim.S)
 # Both of these are load bearing, not tuning: without the hook the kernel never
