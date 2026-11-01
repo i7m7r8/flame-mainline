@@ -48,7 +48,7 @@
  * `extern u64 __cacheline_aligned boot_args[4]` without including the type
  * itself, and every other arm64 file happens to pull types.h in first. */
 #include <linux/build_bug.h>
-#include <linux/byteorder/generic.h>
+#include <linux/byteorder.h>
 #include <linux/cache.h>
 #include <linux/errno.h>
 #include <linux/init.h>
