@@ -39,15 +39,18 @@
  *            vendor dtb phys u64, copy phys u64, copy size u32, rfu u32
  *   +0x1000  verbatim copy of the bootloader's DTB, at most 2 MiB - 4 KiB
  *
- * Read by arch/arm64/kernel/setup.c under CONFIG_ARM64_HANDOVER_CMDLINE. If x0
- * did not hold a flattened tree, or the tree overlaps the region or the payload
- * still being read, the record says "nothing copied" and the kernel boots with
- * the command line from our own DTB.
+ * Read by arch/arm64/kernel/handover.c, called from setup_arch under
+ * CONFIG_ARM64_HANDOVER_CMDLINE. If x0 did not hold a flattened tree, or the
+ * tree overlaps the region, the record says "nothing copied" and the kernel
+ * boots with the command line from our own DTB. If the region itself overlaps
+ * the payload still being read, or is missing, nothing is written there at
+ * all: the record would land on bytes the Image copy has not read yet.
  *
- * If the Image destination would cover this code or its header page, copying
- * would overwrite instructions still being executed, so we spin instead of
- * corrupting memory. The device is still recoverable by flashing the ROM's own
- * boot image back.
+ * If a destination would cover this code or its header page - or, for the DTB,
+ * the Image's not-yet-copied source bytes - copying would overwrite
+ * instructions still being executed or the kernel we are about to boot, so we
+ * spin instead. The device is still recoverable by flashing the ROM's own boot
+ * image back.
  */
 
 	.text
@@ -70,31 +73,66 @@ _start:
 	ldr	w28, [x20, #52]		/* shim_off */
 	ldr	x11, [x20, #64]		/* handover region */
 
+	/* Trust nothing in the header page before using it as a block size and a
+	 * destination. A damaged page must not become a 4 GiB memmove into an
+	 * arbitrary physical address. */
+	ldr	x8, [x20]			/* magic, "SWEETLNX" little endian */
+	movz	x9, #0x5753
+	movk	x9, #0x4545, lsl 16
+	movk	x9, #0x4c54, lsl 32
+	movk	x9, #0x584e, lsl 48
+	cmp	x8, x9
+	b.ne	halt
 	ldr	w8, [x20, #8]		/* abi version */
 	cmp	w8, #2
 	b.ne	halt
+	mov	x9, #0x20000000		/* 512 MiB: far past any Image we build */
+	cmp	x22, x9
+	b.hs	halt
+	mov	x9, #0x1000000		/* 16 MiB: ABL's merged tree is about 1 MiB */
+	cmp	x24, x9
+	b.hs	halt
 
 	sub	x19, x19, x28		/* x19 = payload base */
 
-	/* The only overlap that is fatal is a destination covering the header
-	 * page or this code: the copy would rewrite instructions that are still
-	 * executing, and the payload sitting on top of image_load is the normal
-	 * case, not an error (memmove picks a direction for that). So compare
-	 * both destinations against the two pages we are standing on. */
+	/* Two overlaps are fatal, and the ordering of the copies decides which:
+	 *
+	 *   a destination covering the header page or this code, because the copy
+	 *   would rewrite instructions that are still executing;
+	 *   the DTB destination covering the Image's source bytes, because the
+	 *   DTB moves first and the Image copy reads that source afterwards.
+	 *
+	 * A destination covering its own source is not an error (memmove picks a
+	 * direction), and the Image destination covering the DTB's source is not
+	 * either, because that source has already been read. The payload sitting
+	 * on top of image_load is the normal case, not an error.
+	 *
+	 * The handover region against both destinations is not checked here: it
+	 * is checked at pack time (tools/mklinuxpayload.py refuses a payload whose
+	 * destinations touch it), and the worst case is a lost command line
+	 * rather than a corrupt boot, so degrading quietly beats halting. */
 	add	x9, x19, x28
 	sub	x9, x9, #0x1000		/* our span starts: header page */
 	add	x10, x19, x28
 	add	x10, x10, #0x1000	/* our span ends: after this code */
-	cmp	x25, x10		/* Image dst */
+	cmp	x25, x10		/* Image dst vs our span */
 	b.hs	.Ldest_dtb
 	add	x16, x25, x22
 	cmp	x9, x16
 	b.lo	halt
 .Ldest_dtb:
-	cmp	x26, x10		/* DTB dst */
-	b.hs	.Ldest_ok
+	cmp	x26, x10		/* DTB dst vs our span */
+	b.hs	.Ldest_src
 	add	x16, x26, x24
 	cmp	x9, x16
+	b.lo	halt
+.Ldest_src:
+	add	x5, x19, x21
+	add	x6, x5, x22		/* Image source, still to be read */
+	cmp	x26, x6			/* DTB dst vs that source */
+	b.hs	.Ldest_ok
+	add	x16, x26, x24
+	cmp	x5, x16
 	b.lo	halt
 .Ldest_ok:
 	/* Handover before anything moves: the Image copy may well land on the
@@ -163,15 +201,47 @@ handover:
 	mov	x8, xzr			/* copy size, 0 until proven otherwise */
 	mov	x9, xzr			/* copy address */
 
+	/* First, and before anything is written down: is the region somewhere we
+	 * are still standing on? The record goes into the region's first page
+	 * whether or not the copy succeeds, so a region that overlaps the payload
+	 * would have its not-yet-copied Image bytes - or this very code - replaced
+	 * by "FLAMHNDV". Refuse the whole handover in that case and return
+	 * without touching a byte; the kernel reads a stale region, finds no
+	 * magic, and boots with our own command line. Losing the androidboot tags
+	 * is recoverable by the user flashing the ROM's image back; overwriting
+	 * the kernel is not.
+	 *
+	 * The region also has to be real: zero (an older payload) or a base that
+	 * is not 2 MiB aligned (the record stores 8 byte values into it, and an
+	 * unaligned store with the MMU off is an alignment fault with no handler).
+	 */
+	cmp	x11, xzr
+	b.eq	.Lhv_ret
+	tst	x11, #0x1fffff
+	b.ne	.Lhv_ret
+	add	x4, x19, x28
+	add	x4, x4, #0x1000		/* payload end, with slack for this code */
+	add	x5, x11, #0x200000	/* region end */
+	cmp	x11, x4
+	b.hs	.Lhv_tree		/* region starts at/after payload end */
+	cmp	x19, x5
+	b.hs	.Lhv_tree		/* payload starts at/after region end */
+.Lhv_ret:
+	mov	x30, x10
+	ret
+
+.Lhv_tree:
 	/* Reading the header at all is a risk: with the MMU off an unaligned
 	 * 32-bit load takes an alignment fault, and there is no handler yet. A
 	 * real FDT is at least 4 byte aligned, so anything else is not a tree. */
 	tst	x17, #3
 	b.ne	.Lhv_record
 	/* Nor may a wild pointer be dereferenced: without a handler it faults the
-	 * boot, so insist on something that can be SM4450 DRAM. The loader gives
-	 * us this address, so it is ABL's, and ABL parks its tree well inside
-	 * the first few GiB. */
+	 * boot. This is a coarse plausibility bound, not a memory map - SM4450
+	 * DRAM starts at 0x80000000 and no part sold with this SoC puts a tree
+	 * above 8 GiB, while the floor still admits the qemu virt RAM the test
+	 * boots in. A pointer outside it is ABL handing us junk, and a record
+	 * saying "nothing copied" is the right answer for junk. */
 	mov	x4, #0x40000000
 	cmp	x17, x4
 	b.lo	.Lhv_record
@@ -199,23 +269,18 @@ handover:
 	mov	x8, x4			/* copy what fits; the kernel checks the
 					 * header against the real totalsize */
 .Lhv_span:
-	/* Would the copy land on the tree being read, or on the payload that
-	 * has not been copied out yet? Either way, rather lose the command
-	 * line than corrupt the boot. */
+	/* Would the copy land on the tree being read? The region being clear of
+	 * the payload was settled at entry, and a destination that lands on the
+	 * Image or DTB is harmless in the other direction: those copies have
+	 * already happened by then and the packer forbids it anyway. So this is
+	 * the one case where copying would read garbage, and the answer is to
+	 * record "nothing copied" rather than to try. */
 	add	x5, x17, x8		/* source end */
 	add	x7, x11, #0x200000	/* region end */
 	cmp	x11, x5
-	b.hs	.Lhv_payload		/* region starts at/after src end */
+	b.hs	.Lhv_copy		/* region starts at/after src end */
 	cmp	x17, x7
-	b.hs	.Lhv_payload		/* src starts at/after region end */
-	b	.Lhv_none
-.Lhv_payload:
-	add	x5, x19, x28
-	add	x5, x5, #0x1000		/* payload end, with slack for this code */
-	cmp	x11, x5
-	b.hs	.Lhv_copy		/* region starts at/after payload end */
-	cmp	x19, x7
-	b.hs	.Lhv_copy		/* payload starts at/after region end */
+	b.hs	.Lhv_copy		/* src starts at/after region end */
 	b	.Lhv_none
 .Lhv_copy:
 	add	x0, x11, #0x1000	/* dst = region + record page */
