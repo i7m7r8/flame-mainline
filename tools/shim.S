@@ -9,8 +9,9 @@
  * This shim replaces it. It is entered under the same conditions the stock
  * kernel is (EL1, MMU and D-cache off) and therefore
  *
- *   - is position independent: everything is derived from `adr`, there are no
- *     relocations and no absolute addresses baked into the code,
+ *   - is position independent: every address of our own is derived from `adr`
+ *     and there are no relocations, so nothing but the watchdog register below
+ *     names an absolute address,
  *   - copies the bootloader's DTB into the handover region named in the header
  *     before anything can overwrite it, because that DTB's /chosen/bootargs is
  *     where the bootloader injected androidboot.slot_suffix and the AVB tags,
@@ -61,6 +62,30 @@ _start:
 	 * relocation: 1b is the offset of this very instruction. */
 1:	adr	x19, 1b
 	mov	x17, x0			/* the bootloader's dtb, before we replace it */
+
+	/* Silence the Apps watchdog before anything else, including the ~100 ms
+	 * of copies below. ABL leaves it armed on the way into Linux, the ROM's
+	 * own kernel pets it from a kthread that only exists once its modules
+	 * have loaded, and nothing in a mainline boot ever touches it again: a
+	 * bite is a hardware reset that takes no path through the kernel, so it
+	 * leaves no panic, no oops record and no console output. It is the one
+	 * way this boot can fail with no evidence at all.
+	 *
+	 * The block and its offsets are the ROM's, not a guess: qcom_soc_wdt.ko
+	 * in the vendor ramdisk maps the DT node qcom,wdt@17410000 (reg-names =
+	 * "wdt-base") and writes pet to +0x04, enable to +0x08, reads status at
+	 * +0x0c, bark to +0x10 and bite to +0x14, with tick = ms * 32768 / 1000
+	 * - the always-on sleep clock, so no clock has to be enabled to reach
+	 * it. That driver's qcom_soc_disable_wdt does exactly this: store 0 at
+	 * +0x08, dsb. This is the ROM's own stop, not a reconfiguration, and the
+	 * timer is volatile state: the next stock boot arms it from LK again. */
+	mov	x4, #0x17410000
+	mov	w5, #1
+	str	w5, [x4, #4]		/* pet first, so a bark cannot win the race */
+	dsb	sy
+	str	wzr, [x4, #8]		/* WDT_EN = 0 */
+	dsb	sy
+
 	sub	x20, x19, #0x1000		/* header page */
 
 	ldr	w21, [x20, #16]		/* image_off */
