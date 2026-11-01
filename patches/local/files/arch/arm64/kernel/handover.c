@@ -48,7 +48,6 @@
  * `extern u64 __cacheline_aligned boot_args[4]` without including the type
  * itself, and every other arm64 file happens to pull types.h in first. */
 #include <linux/build_bug.h>
-#include <linux/byteorder.h>
 #include <linux/cache.h>
 #include <linux/errno.h>
 #include <linux/init.h>
@@ -62,6 +61,7 @@
 #include <linux/string.h>
 #include <linux/types.h>
 
+#include <asm/byteorder.h>
 #include <asm/handover.h>
 #include <asm/memory.h>
 #include <asm/page.h>
@@ -135,7 +135,20 @@ static int __init find_region(struct handover_region *r)
 		const void *reg;
 		int len;
 
-		if (!name || strncmp(name, HANDOVER_NODE, strlen(HANDOVER_NODE)))
+		/*
+		 * dtc stores the node name with its unit address, so the tree says
+		 * "handover@bc000000". Compared as a prefix that would also match
+		 * "handoverxyz", and mklinuxpayload.py checks the *basename* against
+		 * the same string - the two sides have to agree exactly or the packer
+		 * validates one node while the kernel reads another. strncmp keeps the
+		 * read inside the eight bytes we are looking for; the byte after them
+		 * is the terminator or the '@', and a name that matches is long enough
+		 * to have one.
+		 */
+		if (!name || strncmp(name, HANDOVER_NODE, sizeof(HANDOVER_NODE) - 1))
+			continue;
+		if (name[sizeof(HANDOVER_NODE) - 1] &&
+		    name[sizeof(HANDOVER_NODE) - 1] != '@')
 			continue;
 		/* two address cells and two size cells, as the board DTS writes it */
 		reg = fdt_getprop(dt, node, "reg", &len);
@@ -261,8 +274,10 @@ static void __init append_androidboot(const void *fdt)
 	}
 
 	/* One line of it verbatim: on the first boot of a new ROM this is the
-	 * whole question, and dmesg is the only place it can be asked. */
-	pr_info("bootloader bootargs: %.*s\n", (int)strlen(args), args);
+	 * whole question, and dmesg is the only place it can be asked. Bounded by
+	 * the property length - a DT value is not guaranteed to be terminated,
+	 * and this one was written by a bootloader we did not audit. */
+	pr_info("bootloader bootargs: %.*s\n", (int)strnlen(args, len), args);
 
 	end = args + len - 1;		/* the property carries a terminator */
 	p = args;
@@ -312,6 +327,7 @@ static void __init take_initrd(const void *fdt)
 {
 	phys_addr_t kstart = __pa_symbol(_text), kend = __pa_symbol(_end);
 	phys_addr_t start = 0, end = 0;
+	phys_addr_t res, res_end;
 	const void *val;
 	int chosen, len;
 
@@ -365,14 +381,34 @@ static void __init take_initrd(const void *fdt)
 		return;
 	}
 
-	if (memblock_reserve(start, end - start))
-		pr_warn("could not reserve initrd %pa-%pa\n", &start, &end);
+	/*
+	 * Anything else already claimed: our own reserved-memory nodes, notably
+	 * the handover region, and the page tables paging_init just built.
+	 * memblock_reserve does not refuse an overlap, it only marks the range,
+	 * so without this test the ramdisk would silently share pages with the
+	 * splash framebuffer or the record we read five lines above, and the
+	 * corruption would surface as a broken initramfs much later.
+	 *
+	 * The reservation is page rounded the way arm64_memblock_init() does it,
+	 * while the addresses handed to the init code stay exact: populate_rootfs
+	 * unpacks from initrd_start, which has to be the cpio's first byte.
+	 */
+	res = start & PAGE_MASK;
+	res_end = PAGE_ALIGN(end);
+	if (memblock_is_region_reserved(res, res_end - res)) {
+		pr_warn("initrd %pa-%pa overlaps memory the kernel already owns, ignoring\n",
+			&start, &end);
+		return;
+	}
+
+	if (memblock_reserve(res, res_end - res))
+		pr_warn("could not reserve initrd %pa-%pa\n", &res, &res_end);
 
 	/* arm64_memblock_init() is behind us, so finish its job by hand */
 	phys_initrd_start = start;
 	phys_initrd_size = end - start;
 	initrd_start = (unsigned long)__va(start);
-	initrd_end = (unsigned long)__va(end);
+	initrd_end = initrd_start + phys_initrd_size;
 
 	/*
 	 * Not a verdict, only a clue: a newc cpio means the image survived.

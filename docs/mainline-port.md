@@ -78,30 +78,42 @@ as a *base*:
 
 | route | userspace | what it costs |
 |-------|-----------|---------------|
-| A: AOSP/GSI + mainline HALs | downloadable AOSP `system.img` (Treble), `drm_hwcomposer` over `drm/msm` for c3f, `minigbm` + panfrost/panthor for Adreno 613, ALSA for LPASS, Linux-input for touch | a vendor/HAL image assembled in CI; no Xiaomi blobs |
-| B: Debian 13 + Phosh + Waydroid | already built (`flame-debian-boot_b.img` path), Waydroid gives the Android apps | nothing new; verified namespaces/binderfs on the stock kernel |
+| A: the ROM's own Android 17 userspace, unchanged | Infinity X as flashed today, with everything the first stage ramdisk insmods built into our Image | a kernel that carries every driver the ROM needs as `=y`, because there is no channel to deliver `.ko` files |
 
-Route B is delivered. Route A is the plan for "Android on mainline". The
-kernel work below (P0..P9) serves both, which is why it is done first.
+Route A is the mission. Debian was built and is dropped: the ROM is what has to
+boot. The kernel work below (P0..P9) serves exactly one goal, a mainline
+`boot.img` that runs the existing Android 17 install.
 
 ## Boot handover (why a shim is needed)
 
-ABL on this device loads `boot_b` as an Android boot image, then boots the
-"kernel" with the **vendor** DTB it built from `dtbo_b`. A mainline `Image`
+ABL on this device loads the boot image as an Android boot image v4, then boots
+the "kernel" with the **vendor** DTB it built from `dtbo_b`. A mainline `Image`
 booted that way receives ravelin's vendor DT and probes nothing (incompatible
 `compatible` strings, no console). So, like the Redmi 12 5G (sky) bring-up:
 
-1. `Image` + `sm4450-xiaomi-flame.dtb` appended with a `SWEETLNX` payload header;
-2. that blob is wrapped in a tiny **EL1 shim** (freestanding aarch64) that ABL
-   accepts as the boot image "kernel";
-3. ABL jumps to the shim at `0xA8000000` with MMU on and its own DTB;
-4. the shim copies the real `Image` to `0xC0000000`, places our DTB 2 MiB below
-   it, disables the MMU and branches to `Image` with `x0 = dtb`, `x1 = x2 = x3 = 0`.
+1. `Image` + `sm4450-xiaomi-flame.dtb` + a `SWEETLNX` header block + the shim
+   are packed into the boot image's kernel section by `tools/mklinuxpayload.py`
+   (`tools/shim.S`, assembled by `tools/mkshim.py`);
+2. ABL jumps to the first byte of that section as it always does. With
+   `CONFIG_EFI` the Image opens with the "MZ" `ccmp` pseudo-nop and the branch
+   to `primary_entry` next, and it is that branch which is rewritten to reach
+   the shim, so nothing has to believe our payload is a kernel;
+3. ABL enters with the MMU and D-cache off, interrupts masked, at EL1, because
+   that is what `Documentation/arch/arm64/booting.rst` requires of the stock
+   kernel it is loading, and the shim is entered under exactly those
+   conditions;
+4. the shim copies the bootloader's DTB into the reserved `handover` region and
+   leaves a record of it, then moves our DTB to `0xBFE00000` and the Image to
+   `0xC0000000`, cleans to the PoC, invalidates the I-cache and branches to
+   `image_load + entry_off` with `x0 = our dtb`, `x1 = x2 = x3 = 0`;
+5. `arch/arm64/kernel/handover.c`, called from `setup_arch()` right after
+   `paging_init()`, reads that record back and grafts on the two things only
+   ABL knows: `/chosen/bootargs`' `androidboot.*` tags and the physical address
+   of the ROM's first-stage ramdisk.
 
-Safety stays identical to the Debian work: only `boot_b` (plus `vendor_boot_b`
-/ `dtbo_b` copies) is ever written, `fastboot --set-active=a` returns to Android
-17 instantly, and the stock `boot.img` is kept next to the output for a
-byte-exact restore.
+Safety is unchanged: only `boot_<slot the ROM lives in>` is ever written, and
+the stock `boot.img` stays next to the output for a byte-exact restore through
+recovery. See `boot-safety.txt`.
 
 ## Build recipe (CI)
 
