@@ -39,3 +39,12 @@ arch/arm64/kernel/setup.c | ^\tpaging_init\(\);$ | after | handover_cmdline_exte
 # scan of it.
 
 arch/arm64/kernel/setup.c | ^\tif \(!early_init_dt_scan\(dt_virt, dt_phys\)\) \{$ | before | handover_memory_fixup(dt_virt, dt_phys); | \thandover_memory_fixup(dt_virt, dt_phys);	/* flame: ABL has the DRAM map, our DTS can only guess it */
+
+# dm-default-key: the target fs_mgr builds for this ROM's metadata encryption.
+# Mainline never carried it, so the source is a files/ copy and the two lines
+# that select it are inserted here.  Anchored rather than patched because the
+# surrounding DM Kconfig text is rewritten every other release.
+
+drivers/md/Makefile | ^obj-\$\(CONFIG_DM_CRYPT\)\s*\+= dm-crypt\.o$ | after | dm-default-key.o | obj-$(CONFIG_DM_DEFAULT_KEY)\t+= dm-default-key.o
+
+drivers/md/Kconfig | ^config DM_SNAPSHOT$ | before | config DM_DEFAULT_KEY | config DM_DEFAULT_KEY\n\ttristate "Default key target (filesystem metadata encryption)"\n\tdepends on BLK_DEV_DM\n\tdepends on BLK_INLINE_ENCRYPTION\n\thelp\n\t  This device-mapper target encrypts everything written to the device\n\t  with one key, except for data that fscrypt has already encrypted\n\t  with a per-file key.  It is what Android's fs_mgr puts below /data\n\t  for metadata encryption.\n\n\t  To compile this code as a module, choose M here: the module will\n\t  be called dm-default-key.\n\n\t  If unsure, say N.\n\n

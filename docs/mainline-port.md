@@ -84,6 +84,60 @@ Route A is the mission. Debian was built and is dropped: the ROM is what has to
 boot. The kernel work below (P0..P9) serves exactly one goal, a mainline
 `boot.img` that runs the existing Android 17 install.
 
+## /data: metadata encryption is the first thing that has to be right
+
+The ROM's fstab (extracted from `stock/vendor_ramdisk.cpio` to
+`/tmp/system/etc/fstab.default`) mounts `/data` as f2fs with
+
+```
+fileencryption=aes-256-xts:aes-256-cts:v2+inlinecrypt_optimized+wrappedkey_v0,
+keydirectory=/metadata/vold/metadata_encryption,
+metadata_encryption=aes-256-xts:wrappedkey_v0
+```
+
+so `userdata` is never mounted directly: `fs_mgr` asks `dmctl` for a
+`default-key` target over it, and vold feeds that target the hardware-wrapped
+storage key KeyMint produced. `strings out/re/system.img` shows the calls
+("Failed to create/populate/wait for default-key device",
+`/metadata_encryption_dir`, `ro.crypto.metadata.enabled`). Three consequences:
+
+1. **The target is not in mainline.** `drivers/md/dm-default-key.c` is an
+   Android-only file, so it is backported as
+   `patches/local/files/drivers/md/dm-default-key.c`, and the bio flag it reads
+   (`bio->bi_skip_dm_default_key`, set by `fscrypt_set_bio_crypt_ctx()` and by
+   f2fs's GC path, which writes a raw bounce page and therefore never reaches
+   fscrypt) comes with it in
+   `patches/local/0007-blk-crypto-add-bi_skip_dm_default_key.patch`. Without the
+   flag every bio of an encrypted file's contents would hit
+   `WARN_ON_ONCE(bio_has_crypt_ctx(bio))` in the target and be killed.
+   The mainline `blk-crypto` API it calls is the same one Android uses
+   (`blk_crypto_init_key()`, `blk_crypto_start_using_key()`,
+   `bio_crypt_set_ctx()`); only `BLK_CRYPTO_KEY_TYPE_STANDARD` was renamed
+   `..._RAW`, `hex2bin()` moved to `<linux/hex.h>`, and `prepare_ioctl` gained
+   the `(cmd, arg, *forward)` arguments and `bdev_nr_sectors()`.
+
+2. **Wrapped keys are upstream, so this needs no vendor blob.**
+   `drivers/soc/qcom/ice.c` reads the ICE version from hardware, and
+   `qcom_scm_has_wrapped_key_support()` asks TrustZone whether the four
+   `QCOM_SCM_SVC_ES` calls (`DERIVE_SW_SECRET`, `GENERATE_ICE_KEY`,
+   `PREPARE_ICE_KEY`, `IMPORT_ICE_KEY`) exist; if they do and
+   `qcom_ice.use_wrapped_keys=1` is on the command line, the profile advertises
+   `BLK_CRYPTO_KEY_TYPE_HW_WRAPPED` and `ufs-qcom.c` passes it to the disk. Our
+   DTS carries the block as `ice_ufs_mem: crypto@1d88000` and the host
+   references it, so `/data` is reachable with the firmware that is already in
+   `tz_b` - which we never write. `qcom_scm` registers at `subsys_initcall` and
+   ICE at `device_initcall`, so `__scm` is set before the version read.
+   The boot log decides it: "Found QC Inline Crypto Engine (ICE) v…" and either
+   "Using HWKM. Supporting wrapped keys only." or "A supported HWKM is not
+   present", which would mean this device stores raw keys and the parameter has
+   to go.
+
+3. **`/data` mount options are all mainline.** `reserve_root`, `resgid`,
+   `fsync_mode`, `atgc`, `gc_merge`, `age_extent_cache`, `inlinecrypt`, `atgc`
+   and `checkpoint=fs` are recognised by 7.1.2's `fs/f2fs/super.c`, so no f2fs
+   patch is needed. `dm-bow` is in the GKI config but nothing in this ROM's
+   `fs_mgr` builds one; it is deliberately not backported.
+
 ## Boot handover (why a shim is needed)
 
 ABL on this device loads the boot image as an Android boot image v4, then boots
