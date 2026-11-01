@@ -242,26 +242,69 @@ jobs:
           python3 - <<'PY' | tee packing.txt
           import struct
           d = open('payload.bin', 'rb').read()
-          (magic, ver, flags, ioff, isz, doff, dsz,
-           iload, dload, eoff, soff, hoff, rfu, sload) = \
-              struct.unpack('<8sIIIIIIQQIIIIQ', d[:72])
+          image = open('Image', 'rb').read()
+          dtb = open('sm4450-xiaomi-flame.dtb', 'rb').read()
+          # ABI 2 puts the Image itself at payload offset 0, so the header block
+          # is not where a v1 payload's would be. It is the last copy of the
+          # magic in the file: nothing before it can contain that string, and
+          # the shim's page is the last thing appended.
+          found = d.rfind(b'SWEETLNX')
+          assert found > 0 and found % 4096 == 0, hex(found)
+          (magic, ver, flags, ioff, isz, doff, dsz, iload, dload,
+           eoff, soff, hoff, rfu, sload) = \
+              struct.unpack('<8sIIIIIIQQIIIIQ', d[found:found + 72])
           assert magic == b'SWEETLNX' and ver == 2, (magic, ver)
-          assert d[ioff:ioff + isz] == open('Image', 'rb').read(), 'image mismatch'
-          assert d[doff:doff + dsz] == open('sm4450-xiaomi-flame.dtb', 'rb').read(), 'dtb mismatch'
+          assert found == hoff, (hex(found), hex(hoff))
           assert soff == hoff + 4096, 'the shim does not follow its own header page'
+          assert ioff == 0 and isz == len(image), (ioff, isz, len(image))
+          assert d[doff:doff + dsz] == dtb, 'dtb mismatch'
+          # The packed Image must equal the build except for the one word that
+          # was turned into `b shim`, and that word must really jump to the
+          # shim's page. Anything else here means the loader would run a kernel
+          # whose entry address does not match what the shim is told.
+          packed = d[ioff:ioff + isz]
+          pages = [i for i in range(0, isz, 4096)
+                   if packed[i:i + 4096] != image[i:i + 4096]]
+          assert pages == [0], f'more than the header page changed: {pages}'
+          patch = [i for i in range(4096) if packed[i] != image[i]]
+          assert patch, 'nothing was patched, so the loader would run head.S directly'
+          assert all(4 <= i < 8 for i in patch) or all(i < 4 for i in patch), patch
+          # which word was replaced is decided by where the bytes differ, and the
+          # top byte of the two encodings can be the same value, so the run of
+          # differing bytes may be shorter than four
+          patch_off = 4 if max(patch) >= 4 else 0
+          word = struct.unpack('<I', packed[patch_off:patch_off + 4])[0]
+          assert word >> 26 == 0b000101, f'{word:#010x} is not b, not bl'
+          disp = word & 0x3FFFFFF
+          if disp & 0x2000000:
+              disp -= 0x4000000
+          assert patch_off + disp * 4 == soff, (hex(patch_off), hex(soff))
+          if patch_off == 4:
+              assert struct.unpack('<I', packed[:4])[0] == 0xfa405a4d, \
+                  'the MZ signature nop that UEFI loaders look for is gone'
+          # what the shim will jump to, recomputed from the *unpatched* Image
+          src = struct.unpack('<I', image[patch_off:patch_off + 4])[0]
+          sd = src & 0x3FFFFFF
+          if sd & 0x2000000:
+              sd -= 0x4000000
+          assert patch_off + sd * 4 == eoff, (hex(patch_off), hex(eoff))
+          assert struct.unpack('<Q', image[8:16])[0] == 0, 'text_offset is not 0'
           # The handover region is where the shim parks the bootloader's tree and
           # where arch/arm64/kernel/handover.c looks: 0xbc000000..0xbe000000,
           # reserved without no-map in the board DTS. Neither destination may
           # fall in it, and the payload says so explicitly rather than by
           # comment, because the DTS and this header are edited separately.
           assert sload == 0xBC000000, hex(sload)
-          for base, size, name in ((iload, isz, 'image'), (dload, dsz, 'dtb')):
+          runtime = max(struct.unpack('<Q', image[16:24])[0], isz)
+          for base, size, name in ((iload, runtime, 'image'), (dload, dsz, 'dtb')):
               assert base + size <= sload or sload + 0x200000 <= base, \
                      f'{name} overlaps the handover region'
           print(f'payload {len(d)} bytes  abi={ver} flags={flags:#x}')
-          print(f'  image +{ioff:#08x} len {isz:#x} -> {iload:#010x}')
+          print(f'  image +{ioff:#08x} len {isz:#x} file, {runtime:#x} runtime'
+                f' -> {iload:#010x}')
           print(f'  dtb   +{doff:#08x} len {dsz:#x} -> {dload:#010x}')
-          print(f'  entry +{eoff:#06x}  shim +{soff:#06x}  hdr +{hoff:#06x}')
+          print(f'  entry +{eoff:#06x}  shim +{soff:#06x}  hdr +{hoff:#06x}'
+                f'  (Image+{patch_off:#x} patched)')
           print(f'  handover {sload:#010x}+0x200000')
           PY
           cp "$GITHUB_WORKSPACE/flash-boot.txt" FLASH.txt

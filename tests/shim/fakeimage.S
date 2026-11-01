@@ -3,9 +3,10 @@
  * Stand-in for arch/arm64/boot/Image, used by tests/shim/run.sh.
  *
  * It has the same first-64-bytes shape as a real kernel image so that
- * tools/mklinuxpayload.py treats it identically (branch at 0, u64 text_offset
- * at 0x8, u64 image_size at 0x10, magic u32 at 0x38), and it prints what the
- * shim must have gotten right by the time the kernel is entered:
+ * tools/mklinuxpayload.py treats it identically (the efi_signature_nop that
+ * CONFIG_EFI arm64 Images open with, the branch to the entry next, u64
+ * text_offset at 0x8, u64 image_size at 0x10, magic u32 at 0x38), and it prints
+ * what the shim must have gotten right by the time the kernel is entered:
  *
  *   "SHIM-ENTRY"    the patched first instruction reached the shim, and the
  *                   shim jumped back into the relocated copy
@@ -20,11 +21,17 @@
 	.text
 	.set SCRATCH, 0x43000000
 
+	/* ccmp x18, #0, #0xd, pl: what arch/arm64/kernel/efi-header.S calls
+	 * efi_signature_nop. It only touches the flags, and its opcode spells
+	 * "MZ" for UEFI loaders. The packer keeps it and patches the branch
+	 * after it, so the test image has to carry it too. */
+	.long	0xfa405a4d
 	b	.Lentry
 
 	.org	0x8
-	.quad	0x400			/* text_offset: code0 branches here, and
-					 * mklinuxpayload insists the two agree */
+	.quad	0			/* text_offset: the file starts at the
+					 * 2 MiB aligned base the shim copies to,
+					 * and mklinuxpayload insists on that */
 	.org	0x10
 	.quad	0			/* image_size: 0, so qemu loads the whole
 					 * section instead of trusting a size */
