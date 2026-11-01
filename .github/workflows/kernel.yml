@@ -183,6 +183,13 @@ jobs:
           set -euo pipefail
           cd "$SRC"
           make ARCH=$ARCH CROSS_COMPILE=$CROSS_COMPILE defconfig
+          # arch/arm64/configs/defconfig is a *module* config: 1332 symbols come
+          # out =m. With CONFIG_MODULES=n those are promoted to built-in, which
+          # would link Apple, Allwinner and Raspberry Pi drivers into a phone
+          # kernel and grow the Image by a factor of several, so the module
+          # state is turned off first and flame's fragment re-enables, by name,
+          # the handful that this board actually needs.
+          sed -i 's/=m$/=n/' .config
           ./scripts/kconfig/merge_config.sh -m .config \
             "$GITHUB_WORKSPACE/config/flame.fragment"
           make ARCH=$ARCH CROSS_COMPILE=$CROSS_COMPILE olddefconfig
