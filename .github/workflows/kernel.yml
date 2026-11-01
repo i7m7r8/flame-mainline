@@ -196,6 +196,25 @@ jobs:
             grep -qx "CONFIG_$sym=y" .config || {
               echo "CONFIG_$sym is not y in .config" >&2; exit 1; }
           done
+          # Nothing on this device can load a .ko - the boot image carries a
+          # kernel section only, /vendor is read-only under AVB, and a stock
+          # module will not load into a mainline kernel or the other way round.
+          # So =m means "absent", and olddefconfig demotes =y to =m without a
+          # word whenever a dependency is a module: that is how DRM_MSM and the
+          # whole audio family went missing from the Image silently.
+          if grep -q '=m$' .config; then
+            echo "CONFIG_MODULES=n did not hold; these would be unloadable:" >&2
+            grep '=m$' .config | head -20 >&2
+            exit 1
+          fi
+          dropped=0
+          for want in $(grep -oE '^CONFIG_[A-Za-z0-9_]+=y' \
+                         "$GITHUB_WORKSPACE/config/flame.fragment"); do
+            grep -qx "$want" .config || {
+              echo "$want is not in .config: unknown name or unmet dependency" >&2
+              dropped=1; }
+          done
+          [ "$dropped" -eq 0 ] || exit 1
           cp .config "$GITHUB_WORKSPACE/out/flame.config"
 
       - name: Build Image and dtbs
@@ -217,7 +236,7 @@ jobs:
           cd "$GITHUB_WORKSPACE/out"
           cp "$SRC/arch/arm64/boot/Image" Image
           cp "$SRC/arch/arm64/boot/dts/qcom/sm4450-xiaomi-flame.dtb" .
-          grep -E '^(CONFIG_(DRM_MSM|INTERCONNECT_QCOM_SM4450|SM_GCC_4450|SM_DISPCC_4450|SM_GPUCC_4450|SM_CAMCC_4450|PINCTRL_SM4450|MMC_SDHCI_MSM|SCSI_UFS_QCOM|USB_DWC3_QCOM|PHY_QCOM.*|ATH10K.*|BT_QCA|SND_SOC.*|QCOM_GPI_DMA|TOUCHSCREEN.*|REGULATOR_QCOM.*|IOMMU.*|QCOM_PMIC_GLINK|UCSI_GLINK|QCOM_BATTMGR|QCOM_SOCINFO))=' \
+          grep -E '^(CONFIG_(DRM_MSM|INTERCONNECT_QCOM_SM4450|SM_GCC_4450|SM_DISPCC_4450|SM_GPUCC_4450|SM_CAMCC_4450|PINCTRL_SM4450|MMC_SDHCI_MSM|SCSI_UFS_QCOM|USB_DWC3_QCOM|PHY_QCOM.*|ATH10K.*|BT_QCA|SND_SOC.*|QCOM_GPI_DMA|TOUCHSCREEN.*|REGULATOR_QCOM.*|IOMMU.*|QCOM_PMIC_GLINK|UCSI_PMIC_GLINK|BATTERY_QCOM_BATTMGR|QCOM_SOCINFO|RPMSG_QCOM_GLINK.*|QCOM_APR|QRTR.*))=' \
             flame.config > enabled.txt || true
           dtc -I dtb -O dts sm4450-xiaomi-flame.dtb > sm4450-xiaomi-flame.cdt.dts 2>/dev/null
           ls -lh

@@ -2,6 +2,18 @@
 # Unknown symbols are silently dropped by olddefconfig; CI greps this list into
 # enabled.txt so a typo shows up as a missing driver rather than a silent hang.
 
+# ---- no modules, ever
+# The ROM's first stage insmods 94 stock .ko files, and no channel exists to
+# deliver rebuilt ones: the boot image has a kernel section only, /vendor is
+# read-only under AVB, and a mainline .ko would not load into a stock kernel or
+# the other way round. So a driver configured =m simply does not exist for
+# Android, and CONFIG_MODULES=n is what makes that visible at build time:
+# with it off, olddefconfig silently demotes every =y below whose dependency is
+# a module - DRM_MSM, the whole SND_SOC_QCOM family, remoteproc, LPG LEDs -
+# and the Image links without them. It also saves building 1332 unusable
+# modules.
+CONFIG_MODULES=n
+
 # ---- SoC bus / firmware glue
 CONFIG_ARCH_QCOM=y
 CONFIG_QCOM_SCM=y
@@ -11,17 +23,16 @@ CONFIG_QCOM_SMEM=y
 # and the link fails; it also has to be up before the wifi/bt firmware names
 # are derived, so built-in is what flame wants anyway.
 CONFIG_QCOM_SOCINFO=y
-CONFIG_QCOM_CMDDB=y
+CONFIG_QCOM_COMMAND_DB=y
 CONFIG_QCOM_PDC=y
 CONFIG_QCOM_RPMH=y
-CONFIG_QCOM_BCM_VOTER=y
 CONFIG_QCOM_WDT=y
-CONFIG_QCOM_RAMDUMP=y
 CONFIG_QCOM_STATS=y
 CONFIG_QCOM_TSENS=y
 CONFIG_QCOM_SPMI_TEMP_ALARM=y
-CONFIG_QCOM_QFPROM=y
 CONFIG_NVMEM=y
+CONFIG_NVMEM_QCOM_QFPROM=y
+CONFIG_NVMEM_QCOM_SEC_QFPROM=y
 CONFIG_RESET_QCOM_PDC=y
 
 # ---- clocks / pinctrl / interconnect / iommu
@@ -39,9 +50,7 @@ CONFIG_INTERCONNECT_QCOM_SM4450=y
 CONFIG_ARM_SMMU=y
 CONFIG_ARM_SMMU_QCOM=y
 CONFIG_IOMMU_IO_PGTABLE_ARMV7S=y
-CONFIG_IOMMU_IO_PGTABLE_ARMV7S_LPAE=y
 CONFIG_CPU_FREQ_GOV_SCHEDUTIL=y
-CONFIG_CPU_FREQ_GOV_INTERACTIVE=n
 CONFIG_CPU_IDLE_GOV_MENU=y
 CONFIG_THERMAL_GOV_POWER_ALLOCATOR=y
 CONFIG_PM_DEVFREQ=y
@@ -50,12 +59,12 @@ CONFIG_DEVFREQ_GOV_PERFORMANCE=y
 CONFIG_DEVFREQ_GOV_USERSPACE=y
 
 # ---- GenI: console uart, I2C (touch + pm8010n), SPI, GPI DMA
+# QCOM_GPI_UART, _I2C and _SPI were vendor-tree names: upstream routes GPI
+# through the same geni-* drivers as the M-AM controllers, gated by
+# QCOM_GPI_DMA alone.
 CONFIG_QCOM_GENI_SE=y
 CONFIG_QCOM_GSBI=y
 CONFIG_QCOM_GPI_DMA=y
-CONFIG_QCOM_GPI_UART=y
-CONFIG_QCOM_GPI_I2C=y
-CONFIG_QCOM_GPI_SPI=y
 CONFIG_SERIAL_QCOM_GENI=y
 CONFIG_SERIAL_QCOM_GENI_CONSOLE=y
 CONFIG_SERIAL_DEV_BUS=y
@@ -77,12 +86,13 @@ CONFIG_RTC_DRV_PM8XXX=y
 CONFIG_IIO=y
 CONFIG_QCOM_SPMI_VADC=y
 CONFIG_QCOM_SPMI_IADC=y
-CONFIG_QCOM_ADC_TM5=y
+CONFIG_QCOM_SPMI_ADC_TM5=y
 CONFIG_QCOM_PMIC_GLINK=y
 CONFIG_TYPEC=y
 CONFIG_TYPEC_UCSI=y
-CONFIG_UCSI_GLINK=y
-CONFIG_QCOM_BATTMGR=y
+CONFIG_UCSI_PMIC_GLINK=y
+CONFIG_BATTERY_QCOM_BATTMGR=y
+CONFIG_POWER_SUPPLY=y
 CONFIG_QCOM_QMI_HELPERS=y
 
 # ---- storage: UFS with ICE, microSD
@@ -104,7 +114,7 @@ CONFIG_PHY_QCOM_QMP=y
 CONFIG_PHY_QCOM_QMP_UFS=y
 CONFIG_PHY_QCOM_QMP_COMBO=y
 CONFIG_PHY_QCOM_QMP_PCIE=y
-CONFIG_PHY_QCOM_USB_SNPS_FEMTO_EMI=y
+CONFIG_PHY_QCOM_USB_SNPS_FEMTO_V2=y
 
 # ---- USB: gadget is the console until the panel works
 CONFIG_USB=y
@@ -120,8 +130,8 @@ CONFIG_USB_CONFIGFS_ACM=y
 CONFIG_USB_CONFIGFS_NCM=y
 CONFIG_USB_CONFIGFS_RNDIS=y
 CONFIG_USB_CONFIGFS_F_FS=y
-CONFIG_USB_CONFIGFS_F_ACC=y
-CONFIG_USB_CONFIGFS_F_AUDIO_SRC=y
+# f_acc and f_audio_source were dropped upstream; adb, mtp and ptP on Android
+# 11+ all go through f_fs, which is above.
 CONFIG_USB_ACM=y
 CONFIG_USB_SERIAL=y
 CONFIG_USB_SERIAL_CONSOLE=y
@@ -133,14 +143,13 @@ CONFIG_USB_NET_QMI_WWAN=y
 # ---- display: DPU + DSI + panel + backlight; mainline has a real VT
 CONFIG_DRM=y
 CONFIG_DRM_MSM=y
-CONFIG_DRM_DP_AUX_CHARDEV=y
+CONFIG_DRM_DISPLAY_DP_AUX_CHARDEV=y
 CONFIG_DRM_PANEL=y
 CONFIG_DRM_PANEL_SIMPLE=y
 CONFIG_DRM_PANEL_XIAOMI_C3F=y
 CONFIG_DRM_FBDEV_EMULATION=y
 CONFIG_DRM_FBDEV_OVERALLOC=100
 CONFIG_BACKLIGHT_CLASS_DEVICE=y
-CONFIG_BACKLIGHT_GENERIC=y
 CONFIG_FB=y
 CONFIG_VT=y
 CONFIG_VT_CONSOLE=y
@@ -171,7 +180,10 @@ CONFIG_SND_SOC_SC8280XP=y
 CONFIG_SND_SOC_WCD9335=y
 CONFIG_SND_SOC_WCD934X=y
 CONFIG_SND_SOC_WCD938X=y
-CONFIG_SND_SOC_WCD938X_IW_PRIV=y
+CONFIG_SND_SOC_WCD938X_SDW=y
+CONFIG_SND_SOC_WCD939X=y
+CONFIG_SND_SOC_WCD939X_SDW=y
+CONFIG_SND_SOC_WSA884X=y
 CONFIG_SND_SOC_WSA881X=y
 CONFIG_SND_SOC_WSA883X=y
 CONFIG_SND_SOC_AW88166=y
@@ -211,10 +223,14 @@ CONFIG_QCOM_Q6V5_ADSP=y
 CONFIG_QCOM_Q6V5_PAS=y
 CONFIG_QCOM_Q6V5_WCSS=y
 CONFIG_QCOM_SYSMON=y
-CONFIG_QCOM_GLINK=y
-CONFIG_QCOM_GLINK_CTRL=y
-CONFIG_QCOM_GLINK_SSR=y
+CONFIG_RPMSG_QCOM_GLINK=y
+CONFIG_RPMSG_QCOM_GLINK_SMEM=y
+CONFIG_RPMSG_QCOM_GLINK_RPM=y
+CONFIG_QCOM_APR=y
+CONFIG_RPMSG_QCOM_SMD=y
 CONFIG_QCOM_FASTRPC=y
+CONFIG_QRTR=y
+CONFIG_QRTR_SMD=y
 
 # ---- filesystems + container support (Debian rootfs, Waydroid)
 CONFIG_EXT4_FS=y
@@ -236,10 +252,11 @@ CONFIG_MEMCG=y
 CONFIG_BLK_CGROUP=y
 CONFIG_CGROUP_WRITEBACK=y
 CONFIG_CGROUP_SCHED=y
-CONFIG_CGROUP_DEVICES=y
+CONFIG_CGROUP_DEVICE=y
 CONFIG_ANDROID_BINDER_IPC=y
 CONFIG_ANDROID_BINDERFS=y
-CONFIG_ASHMEM=y
+# ashmem was removed from upstream: Android 11+ passes the
+# buffers over binder's own dmabuf heap, so nothing needs it.
 CONFIG_KEYS=y
 CONFIG_SECURITY_APPARMOR=y
 CONFIG_PSTORE=y
@@ -256,7 +273,7 @@ CONFIG_IPV6=y
 CONFIG_BRIDGE=y
 
 # ---- debug
-CONFIG_SCHED_DEBUG=y
+CONFIG_DEBUG_KERNEL=y
 CONFIG_FTRACE=y
 CONFIG_KALLSYMS=y
 CONFIG_PRINTK_TIME=y
