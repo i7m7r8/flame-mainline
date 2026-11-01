@@ -1,8 +1,9 @@
 name: mainline kernel (flame)
 
 # Builds upstream Linux for SM4450 with the ROCKNIX SM4450 patch series plus
-# this repo's flame board DTS. Image + dtbs only (milestones P0/P1); the EL1
-# shim and boot_b packing come once the tree builds clean.
+# this repo's flame board DTS, and packs it as an Android boot image v4 with the
+# EL1 DTB-handover shim. The ROM's own generic ramdisk (its only /init) is not
+# CI's to carry: RAMDISK.txt tells you how to attach it locally.
 
 on:
   workflow_dispatch:
@@ -335,6 +336,34 @@ jobs:
           PY
           cp "$GITHUB_WORKSPACE/flash-boot.txt" FLASH.txt
           cp "$GITHUB_WORKSPACE/boot-safety.txt" BOOT-SAFETY.txt
+          # One thing is deliberately missing from this image: the ROM's
+          # first-stage init. /init lives in boot.img's generic ramdisk (the
+          # vendor ramdisk in vendor_boot holds only lib/modules and system/bin
+          # and no init at all), and those bytes belong to the ROM, so they are
+          # not in this repository and cannot be packed here. Booting this
+          # image as-is gets a kernel that unpacks a rootfs with no init and
+          # resets. Attaching the ramdisk is the one step that has to happen
+          # where the ROM is:
+          python3 - <<'PY' > RAMDISK.txt
+          import struct
+          d = open('flame-mainline-boot.img', 'rb').read(4096)
+          assert d[:8] == b'ANDROID!', d[:8]
+          ks, rs = struct.unpack_from('<2I', d, 8)
+          assert rs == 0, f'expected no ramdisk from CI, got {rs} bytes'
+          print("Attach the ROM's own first-stage ramdisk, then flash the result:")
+          print()
+          print('  python3 tools/attach_rom_ramdisk.py \\')
+          print('    --boot  flame-mainline-boot.img \\')
+          print('    --rom-boot /path/to/the/ROMs/own/boot.img \\')
+          print('    -o      flame-mainline-final.img')
+          print()
+          print('Your own copy works; on the running ROM:')
+          print('  su 0 cp /dev/block/by-name/boot$(getprop ro.boot.slot_suffix) '
+                  '/sdcard/stock-boot.img')
+          print()
+          print(f'(this image: kernel {ks} bytes, ramdisk {rs} bytes, so no /init)')
+          PY
+          cat RAMDISK.txt >> "$GITHUB_STEP_SUMMARY"
           sha256sum Image sm4450-xiaomi-flame.dtb payload.bin \
             flame-mainline-boot.img > SHA256SUMS
           ls -lh flame-mainline-boot.img payload.bin

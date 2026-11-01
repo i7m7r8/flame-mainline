@@ -1,147 +1,123 @@
-# flame-debian
+# flame-mainline
 
-Debian 13 (trixie) arm64 on the Xiaomi Redmi 14C 5G / POCO M7 5G (`flame`,
-Qualcomm SM4450 "ravelin"), dual booted against Android 17.
+Mainline Linux (stable, currently 7.1.2) for the Xiaomi Redmi 14C 5G / POCO M7
+5G — codename `flame`, Qualcomm SM4450 "ravelin", Adreno 613, WCN3990, 4 GB
+RAM — packed as an Android boot image that boots the **existing Infinity X
+Android 17 userspace** in place. No GSI, no Android rebuild, no Debian: the
+ROM on `super` stays exactly as it is, only its kernel is replaced.
 
-The kernel is the **stock vendor GKI 6.6.82** from the Infinity X Android 17 ROM
-(`6.6.82-android15-8-gd33b207314e6-ab13612522-4k`). It already drives every
-piece of hardware (c3f panel, focaltech touch, Adreno 613, WCN3990, modem, SD),
-so nothing has to be ported. A small initramfs replaces the Android ramdisk:
-it loads the vendor modules from the ROM's own `vendor_boot`, finds the Debian
-rootfs on microSD (`LABEL=flame-root`) and `switch_root`s into it.
+Everything is built in GitHub Actions (`mainline kernel (flame)`). The one step
+that cannot happen in CI is the last one, described under "Use".
 
-## Layout and safety
+## The four things that make this work
 
-| slot | contents |
-|------|----------|
-| `boot_a` / `vendor_boot_a` / `dtbo_a` | **untouched** — working Android 17 |
-| `boot_b` | Debian: stock kernel + flame initramfs |
-| `vendor_boot_b` / `dtbo_b` | stock copies from the same ROM |
-| `recovery`, `vbmeta*`, bootloader partitions | **never touched** |
+1. **The bootloader boots the wrong device tree.** ABL jumps into the boot
+   image's kernel section with the vendor DT it assembled from `dtbo`, which a
+   mainline kernel probes nothing of. So the kernel section is
+   `Image` + `sm4450-xiaomi-flame.dtb` + an EL1 shim (`tools/shim.S`): the
+   `b primary_entry` in the Image header is rewritten to reach the shim, the
+   shim parks ABL's tree in a reserved region, moves our DTB to `0xBFE00000`
+   and the Image to `0xC0000000`, and branches to `primary_entry` with `x0`
+   pointing at our tree. `arch/arm64/kernel/handover.c` then grafts back the
+   three things only ABL knows: the `androidboot.*` tags, the address of the
+   ROM's init ramdisk, and the real DRAM map. See `docs/mainline-port.md`.
+2. **The ROM's first stage lives in *this* partition.** `/init` is in boot.img's
+   *generic ramdisk* section — `vendor_boot`'s vendor ramdisk holds only
+   `/lib/modules` and has no init at all. CI may not carry the ROM's bytes, so
+   `flame-mainline-boot.img` arrives with `ramdisk_size=0` and does not boot as
+   it is. `tools/attach_rom_ramdisk.py` splices your own ROM's ramdisk section
+   back in byte for byte and keeps the stock `os_version` and header cmdline.
+3. **`CONFIG_MODULES=n` is not a blocker.** There is no `.ko` channel to this
+   ROM, so the tree is built with everything built-in. First-stage init's
+   "Failed to load kernel modules" fatal only fires when it *did* load at least
+   one module (`module_count_` is bumped on a successful `finit_module`, and is
+   0 here), so a kernel that loads nothing passes. No userspace patch, no
+   `finit_module` lie.
+4. **There is a log channel for boots that do not finish.** `pstore_blk` on the
+   `oops` partition carries kmsg out of a panic or an init-triggered reboot —
+   256 KiB zone, `max_reason=4` so `KMSG_DUMP_SHUTDOWN` still writes,
+   `pstore.kmsg_bytes=262144` on the kernel line. `flash-boot.txt` gives the
+   one-line read-back.
 
-- Only `boot_b`, `vendor_boot_b` and `dtbo_b` are written.
-- Android stays bootable in slot `a`; `fastboot --set-active=a` returns to it
-  at any time, no reflash required.
-- The stock `boot.img`, `vendor_boot.img`, `dtbo.img` and `recovery.img` from
-  the ROM are kept next to the flash images, so slot `b` and recovery can be
-  restored byte for byte.
-- A failed Debian boot just hangs in the initramfs rescue shell (Power+VolDown
-  gets back to fastboot); the bootloader is never modified.
+## Safety
 
-## Images
+One partition is ever written: `boot_<slot the ROM boots from>`, the slot that
+already holds Infinity X. Never touched: `abl`, `xbl`, `xbl_config`, `tz`,
+`hyp`, `devcfg`, `pmic`, `qupfw`, `aop`, `vbmeta`, `vbmeta_system`,
+`vendor_boot`, `dtbo`, `super`, recovery. `boot-safety.txt` explains why a
+failed boot is recoverable without touching a flash tool.
 
-- `flame-debian-boot_b.img` — boot v4, stock kernel, flame initramfs
-  (`tools/repack_bootimg.py`)
-- `flame-debian-rootfs.img.xz` — Debian 13 arm64 ext4, built in CI
-  (`scripts/build-debian-rootfs.sh`). Mobian-style mobile stack from Debian's
-  own packages: `phosh` + `phoc` (compositor), `squeekboard` on-screen
-  keyboard, `osmo`, `gnome-calls` (dialer) + `callaudiod`, `gnome-contacts`,
-  `feedbackd`, `phosh-mobile-settings`, pipewire,
-  NetworkManager, nautilus/epiphany, plus `weston` and `waydroid`.
-  root password `flame`
-  (the dialer is `gnome-calls`; Debian trixie has no package named `calls`)
-- stock `boot.img`, `vendor_boot.img`, `dtbo.img`, `recovery.img`
-
-## Flash
-
-Write the rootfs to a microSD card first:
-
-```sh
-xz -dc flame-debian-rootfs.img.xz | sudo dd of=/dev/sdX bs=4M status=progress conv=fsync
-```
-
-Then, while the phone boots Android (slot `a`, `fastboot devices` works):
+Restore, from the ROM's own boot.img:
 
 ```sh
-fastboot getvar current-slot          # must print: a
-fastboot flash boot_b        flame-debian-boot_b.img
-fastboot flash vendor_boot_b vendor_boot.img
-fastboot flash dtbo_b        dtbo.img
-fastboot --set-active=b
+fastboot flash boot_<slot> boot.img
 fastboot reboot
 ```
 
-The USB port becomes a CDC-ACM serial console (`ttyACM0` on Linux, a COM port
-on Windows); log in as `root` / `flame`. This is the only console: the GKI
-kernel has no VT and no fbcon.
+## Build
 
-Back to Android:
+Workflow `mainline kernel (flame)`, on `workflow_dispatch` or any push touching
+`dts/`, `patches/`, `config/flame.fragment`, `tools/`, `tests/` or the workflow
+itself. It downloads the upstream stable tarball, applies the
+ROCKNIX/distribution SM4450 series, installs this repo's local drivers and the
+flame DTS through `tools/install_local.py` (anchored rules, idempotent, fails
+loudly rather than quietly dropping a driver), applies `config/flame.fragment`
+over `tinyconfig` with a value-level audit that fails the build on any dropped
+symbol, builds `Image` plus `qcom/sm4450-xiaomi-flame.dtb`, self-tests the
+shim, and packs `flame-mainline-boot.img` — boot v4, Android 17, patch level
+2026-10, empty header cmdline, field for field like the ROM's own image.
+
+Artifact `flame-mainline-<sha>`: `flame-mainline-boot.img`, `payload.bin`,
+`Image`, `sm4450-xiaomi-flame.dtb`, `sm4450-xiaomi-flame.cdt.dts`,
+`flame.config`, `enabled.txt`, `packing.txt`, `build.log`, `SHA256SUMS`,
+`FLASH.txt`, `BOOT-SAFETY.txt`, `RAMDISK.txt`.
+
+There is deliberately no artifact-content validation job and no rootfs job.
+
+## Use
 
 ```sh
-fastboot --set-active=a
-fastboot reboot
+# 1. take the ROM's own boot partition off the device
+adb shell "su 0 cp /dev/block/by-name/boot$(getprop ro.boot.slot_suffix) /sdcard/stock-boot.img"
+
+# 2. splice its generic ramdisk into the CI image
+python3 tools/attach_rom_ramdisk.py --boot flame-mainline-boot.img \
+          --rom-boot stock-boot.img -o flame-mainline-final.img
 ```
 
-Recovery (own 100 MB partition, never written):
+Then flash `flame-mainline-final.img` to that same slot, and nothing else.
+`flash-boot.txt` (also shipped as `FLASH.txt`) is the full procedure, including
+what to read back if the phone resets after a few seconds.
 
-```sh
-fastboot reboot recovery              # or Power+VolUp
-```
+## Layout
 
-Restore slot `b` to stock at any time:
-
-```sh
-fastboot flash boot_b        boot.img
-fastboot flash vendor_boot_b vendor_boot.img
-fastboot flash dtbo_b        dtbo.img
-```
-
-## What the initramfs does
-
-Because the stock GKI config has `CONFIG_DEVTMPFS=n` and `CONFIG_VT=n`, the
-init (`initramfs-vendor/init`) runs its own `tmpfs /dev` + `mdev`, loads the
-modules listed in `vendor_boot`'s `/lib/modules/modules.load`, `modprobe`s
-`dwc3-msm` (USB), binds a configfs ACM gadget, scans `/dev/mmcblk*` and
-`/dev/sd*` for the ext4 label `flame-root`, copies `/lib/modules` into the new
-root (so Debian can later `modprobe` display/touch/wifi drivers), moves
-`/dev /proc /sys /config /tmp` and `exec switch_root /sbin/init`.
-Without a card it drops to a rescue shell on `ttyGS0` instead of hanging.
-
-Stock ramdisks concatenate as LZ4 legacy frames, so the initramfs is packed
-the same way (`tools/mklz4legacy.py`).
+| path | what |
+|------|------|
+| `dts/sm4450-xiaomi-flame.dts` | board tree: reserved regions where this device really has them, UFS inline crypto, panel/touch wiring, bootargs |
+| `patches/local/` | this repo's drivers and hooks, installed by the anchor rules in `patches/local/manifest` |
+| `patches/rocknix-sm4450.txt` | the upstream SM4450 series CI fetches |
+| `config/flame.fragment` | the whole config delta, asserted symbol by symbol |
+| `tools/` | shim, payload and boot-image packers, handover self-test, ramdisk attach tool |
+| `docs/` | `mainline-port.md` (the port), `hardware-flame.md` (UART, partitions) |
+| `stock/` | ROM extracts, kept locally, **never committed** |
 
 ## Status
 
-- Boot path: kernel + initramfs + switch_root — built, needs on-device run
-- Debian 13 rootfs: CI build (debootstrap + qemu-user), artifact = the `.img.xz`
-  plus `SHA256SUMS`; no content validation step (runners cannot loop-mount, and
-  `xz -f` removes the raw image before any check could see it)
-- Mobile UI: `phosh.service` starts `phoc -S -E /usr/libexec/phosh` directly,
-  because this kernel has no VT so gdm/gnome-session and the packaged
-  `phosh.service` (both need `/dev/tty0` + a VT) cannot be used. It renders
-  through `msm_drm` once the panel driver binds; software pixels
-  (`WLR_RENDERER=pixman`, `GALLIUM_DRIVER=llvmpipe`) until the Adreno 613 works
-- Display: `msm_drm.ko` and `focaltech_spi.ko` ship in the vendor ramdisk and
-  are copied into the rootfs; `/etc/modules-load.d/flame.conf` loads panel,
-  touch, vibrator and battery drivers at boot
-- Waydroid: package installed, and the stock kernel turns out to support what
-  LXC/Waydroid needs - measured on the running vendor GKI:
-  `unshare -Upirm --fork --map-root-user` succeeds (user/PID/IPC/mount
-  namespaces), `max_user_namespaces` and `max_pid_namespaces` sysctls exist,
-  cgroup v2 is mounted, overlayfs mounts, and `binderfs` is already mounted by
-  Android at `/dev/binderfs`. The rootfs mounts binderfs via `/etc/fstab`.
-  What is still missing is a usable display: without the Adreno 613 driver
-  Waydroid renders in software.
-- Mainline 7.x work that preceded this route is kept in `linux/`, `dts/`,
-  `config/` and the older commits; it is not part of the image anymore.
+- Boot path (shim → handover → first stage → Android userspace): built and
+  reasoned through to the byte level; needs the on-device run, and the pstore
+  channel is in place to report back whatever it does.
+- Storage: UFS with inline crypto described, `dm-default-key` backported, f2fs
+  options matched against what this ROM's `fs_mgr` passes.
+- Display: the c3f panel driver and the ft8726 touch id are local, `msm_drm`
+  and the SM4450 clock/interconnect/regulator set are enabled; first real
+  pixels are the next milestone.
+- GPU, camera, audio, Wi-Fi/BT, modem: enabled wherever mainline has an SM4450
+  driver; the vendor-only piles (camera, some thermal and sensor clients) are
+  open items.
+- SELinux is on, with the rest of what the ROM needs taken from the stock
+  config.
 
-## Rebuilding the boot image
-
-The stock kernel images are not committed (they are ~100 MB ROM extracts).
-Place them in `stock/`:
-
-```
-stock/boot.img          # boot_a dump / payload boot.img
-stock/vendor_boot.img   # payload vendor_boot.img
-stock/payload.bin       # optional: extracts dtbo/recovery
-```
-
-```sh
-python3 tools/mkinitramfs.py out/tree out/ramdisk.img --lz4legacy
-python3 tools/repack_bootimg.py stock/boot.img out/ramdisk.img \
-        out/flame-debian-boot_b.img --cmdline 'console=ttyGS0'
-python3 tools/payload_extract.py stock/payload.bin dtbo out/dtbo.img
-```
-
-`out/tree` is `/init` (`initramfs-vendor/init`) plus a static aarch64
-`busybox` from Debian's `busybox-static` package.
+An earlier Debian-on-microSD route that used the stock vendor kernel was
+dropped; `initramfs*/`, `scripts/build-debian-rootfs.sh` and
+`tools/{mkinitramfs,repack_bootimg,mklz4legacy}.py` are leftovers of it and are
+in no image this repo produces now.

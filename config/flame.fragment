@@ -302,10 +302,23 @@ CONFIG_PSTORE_PMSG=y
 # subsystem firmware expects.
 CONFIG_PSTORE_BLK=y
 CONFIG_PSTORE_BLK_BLKDEV="PARTLABEL=oops"
-CONFIG_PSTORE_BLK_KMSG_SIZE=2
-CONFIG_PSTORE_BLK_CONSOLE_SIZE=2
-CONFIG_PSTORE_BLK_PMSG_SIZE=2
-CONFIG_PSTORE_BLK_MAX_REASON=2
+# These are in KIBIBYTES (fs/pstore/blk.c check_size(): `name * 1024`), and the
+# 4096 in verify_size(name, 4096, ...) is a byte *alignment*, not a minimum - so
+# what 2 used to mean here. 256 is 256 KiB, which holds several times the whole
+# boot log and still fits the smallest plausible oops partition (register_pstore_zone
+# fails outright if the zones do not fit, so being modest costs nothing but
+# truncated records). console and pmsg stay 0: with a block backend every
+# console line would be a synchronous O_DSYNC write, which is not something a
+# phone boot should pay.
+CONFIG_PSTORE_BLK_KMSG_SIZE=256
+CONFIG_PSTORE_BLK_CONSOLE_SIZE=0
+CONFIG_PSTORE_BLK_PMSG_SIZE=0
+# enum kmsg_dump_reason in 7.1.2 is UNDEF=0 PANIC=1 OOPS=2 EMERG=3 SHUTDOWN=4,
+# and kmsg_dump() skips a dumper when reason > max_reason. A first-stage init
+# that gives up calls reboot(2), whose kernel_restart() dumps with
+# KMSG_DUMP_SHUTDOWN - with the default of 2 the record was filtered out and
+# the partition kept whatever the previous boot left there.
+CONFIG_PSTORE_BLK_MAX_REASON=4
 # CONFIG_PSTORE_RAM is not set
 
 # ---- networking

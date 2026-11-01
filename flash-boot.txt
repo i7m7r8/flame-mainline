@@ -9,6 +9,11 @@ Artifact: flame-mainline-boot.img
   x0 and puts our board DTB there instead. See tools/shim.S and
   docs/mainline-port.md.
 
+  IT DOES NOT BOOT AS IT IS. The ROM's first stage (/init) is the *generic
+  ramdisk* section of boot.img - vendor_boot's vendor ramdisk has no init at
+  all - and CI is not allowed to carry the ROM's bytes, so the artifact arrives
+  with ramdisk_size=0. Step 3 below attaches them from your own ROM copy.
+
 Nothing else is replaced: vendor_boot, dtbo, vbmeta, super and the bootloader
 partitions keep the ROM's own content.
 
@@ -27,20 +32,40 @@ partitions keep the ROM's own content.
    stock/boot.img in the ROM package is byte-identical, so the ROM zip alone is
    also a valid restore.
 
-3. Flash once, and only to that slot:
+3. Attach the ROM's own first stage to the artifact (it only reads and copies):
 
-     fastboot flash boot_a flame-mainline-boot.img      # if suffix is _a
-     fastboot flash boot_b flame-mainline-boot.img      # if suffix is _b
+     python3 tools/attach_rom_ramdisk.py --boot flame-mainline-boot.img \
+             --rom-boot boot-stock.img -o flame-mainline-final.img
+
+   --rom-boot can be the backup from step 2 or the ROM package's own
+   stock/boot.img. The tool re-reads what it wrote and stops unless the kernel
+   and ramdisk sections are byte-identical to the inputs, so a mismatched ROM
+   revision shows up here rather than on the phone.
+
+4. Flash once, and only to that slot:
+
+     fastboot flash boot_a flame-mainline-final.img     # if suffix is _a
+     fastboot flash boot_b flame-mainline-final.img     # if suffix is _b
      fastboot --set-active=<same slot>
      fastboot reboot
 
-4. If it does not come up, hold Power+VolDown until fastboot and restore:
+5. If it does not come up, hold Power+VolDown until fastboot and restore:
 
      fastboot flash boot_<slot> stock/boot.img
      fastboot reboot
 
    The image either boots or sits in the shim's halt loop; it cannot write to
-   anything, so there is no state to undo. See BOOT-SAFETY.txt.
+   anything but the boot slot it was flashed to, so there is no state to undo.
+   See BOOT-SAFETY.txt.
+
+6. If it boots to a reset in a few seconds instead of to Android, the reason is
+   on the oops partition by the time you are back in the stock ROM (pstore on
+   block, recorded for panic AND for the reboot(2) that a giving-up init calls):
+
+     su 0 dd if=/dev/block/by-name/oops bs=1M count=1 2>/dev/null | strings | tail -300
+
+   Paste that; it is the boot log. Nothing else on the device survives this
+   boot, so there is no second place to look.
 
 First board bring-up is much easier with a console: the debug UART is the GenI
 QUP at 0xa88000, 115200 8N1, and the bootargs in the DTB ask for it. Pinout and

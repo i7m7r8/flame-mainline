@@ -138,6 +138,58 @@ storage key KeyMint produced. `strings out/re/system.img` shows the calls
    patch is needed. `dm-bow` is in the GKI config but nothing in this ROM's
    `fs_mgr` builds one; it is deliberately not backported.
 
+## First stage: where `/init` actually comes from
+
+The first thing the ROM needs from `boot.img` is not a driver, it is PID 1, and
+its location is easy to guess wrong. Both halves of the boot image were read
+out (`stock/boot.img`, `stock/vendor_boot.img`, `out/re/`):
+
+| image | section | contents |
+|-------|---------|----------|
+| `boot.img` v4 | kernel | 36,456,960 bytes of `6.6.82-android15-8` Image |
+| `boot.img` v4 | **generic ramdisk** | 2,600,656 bytes, 24 entries: `/init` (2,763,568, `-rwxr-x--- root root`), `system/bin/toolbox_ramdisk`, `system/bin/snapuserd_ramdisk`, `system/etc/ramdisk/build.prop`, and the empty mount points |
+| `vendor_boot.img` | vendor ramdisk | 16,134,011 bytes LZ4, one cpio, 324 entries: `lib/modules/*.ko` (288) + `modules.load`/`.dep`/`.alias`/`.blocklist` and `system/bin/*` |
+
+**`/init` is in boot.img, not in vendor_boot.** A boot image packed with
+`ramdisk_size=0` - which is what CI ships, and ships on purpose - therefore hands
+the kernel a rootfs with no init: the kernel unpacks the vendor ramdisk, finds
+neither `/init` nor `/linuxrc`, and the device comes back in about ten seconds.
+That was the whole of the observed "reboot loop", not a driver problem.
+
+ABL concatenates generic + vendor ramdisks into one LZ4 legacy stream and points
+`linux,initrd0` at the result, so `handover.c`'s `take_initrd()` picks up both
+halves as one buffer as long as our image supplies the first; `tools/mklz4legacy.py`
+exists because our own half has to be framed the same way when we build one.
+
+Those bytes belong to the ROM, so they are not in this repository and CI cannot
+pack them. The last step runs where the ROM is, and only copies:
+
+```
+python3 tools/attach_rom_ramdisk.py --boot flame-mainline-boot.img \
+        --rom-boot /path/to/the/ROMs/own/boot.img -o flame-mainline-final.img
+```
+
+It re-packs the *same* kernel bytes with the ROM's ramdisk section, re-derives
+`os_version` and the header cmdline from the ROM's header, and then reads its own
+output back and refuses to finish unless both sections are byte-identical to the
+inputs.
+
+**Module loading does not block us, and no kernel-side lie is needed.** The
+first stage ends with `LOG(FATAL) << "Failed to load kernel modules"`, which
+looks like a dead end for a mainline kernel that cannot accept 288 vendor `.ko`.
+It is not: `LoadKernelModules()` only returns that failure when
+`modules_loaded = m.GetModuleCount()` is greater than zero, and `module_count_`
+is incremented once per *successful* `finit_module()` in
+`libmodprobe/libmodprobe_ext.cpp`. Every vendor module fails (`CONFIG_MODULES=n`,
+so `finit_module` returns `-ENOSYS`; even with it on, the vermagic and CRCs are
+for `6.6.82-android15-8`), the count stays zero, and the function returns true
+after logging nothing. The one knob that would have relaxed the check further,
+`androidboot.first_stage_console`, is compiled out of this ROM anyway:
+`ALLOW_FIRST_STAGE_CONSOLE=0` for non-debuggable builds, and the string
+`androidboot.first_stage_console` is absent from the shipped `/init` while
+`Failed to load kernel modules` is present. `androidboot.load_modules_parallel`
+is read from the *bootconfig*, which we never touch.
+
 ## Boot handover (why a shim is needed)
 
 ABL on this device loads the boot image as an Android boot image v4, then boots
@@ -177,7 +229,35 @@ PATCHSET = ROCKNIX/distribution@next projects/ROCKNIX/devices/SM4450/patches/lin
 LOCAL    = dts/sm4450-xiaomi-flame.dts, flame panel/touch drivers, handover hook,
            config fragment (CONFIG_MODULES=n: no .ko is loadable or deliverable)
 OUTPUT   = out/flame-mainline-boot.img  (+ Image, dtb, payload.bin, SHA256SUMS)
+FINAL    = tools/attach_rom_ramdisk.py adds the ROM's own generic ramdisk
+           (/init); it is the only step that needs a ROM file, and it runs on
+           the machine that has the ROM
 ```
+
+## Getting the log out of a boot that does not finish
+
+Nothing here is readable over USB during first stage (there is no adb before
+`/init` runs, and the vendor console is a UART header). The one channel that
+survives a reset is pstore on the `oops` partition, read back from the stock ROM
+with `su 0 dd if=/dev/block/by-name/oops bs=1M count=1 | strings`. Three things
+had to be true at once, and none of them were the first time:
+
+- `CONFIG_PSTORE_BLK_*_SIZE` is in **KiB**, and the `4096` in
+  `verify_size(name, 4096, ...)` is a byte *alignment*, not a minimum: a value
+  that is not a multiple of 4 falls into `ALIGN(name, 4096)`, which is applied to
+  the KiB number and then re-read as bytes. `=2` meant a 4096 **byte** zone.
+- only one pstore backend can be registered, and the DRAM ring is not readable
+  back on this device (stock Android has no `/dev/mem`, and its `qcom,ramoops`
+  driver re-initialises the ring at probe), so the block backend is the choice;
+  the `ramoops` node stays in the DTS only to keep that DRAM out of the page
+  allocator for the subsystem firmware.
+- `kmsg_dump()` skips a dumper when `reason > max_reason`, and a first stage
+  that gives up calls `reboot(2)`, whose `kernel_restart()` dumps with
+  `KMSG_DUMP_SHUTDOWN` - 4 in 7.1.2's enum, above the default of 2. So the
+  record was filtered out and the partition kept the previous boot's bytes.
+  `CONFIG_PSTORE_BLK_MAX_REASON=4` and `pstore_blk.best_effort=1` are what make
+  an init-triggered reset leave anything behind, and `pstore.kmsg_bytes=262144`
+  raises the per-record cap from its 10 KiB default to the zone size.
 
 `.github/workflows/kernel.yml` is the only workflow: it self-tests the shim
 under qemu, builds `Image` and flame's dtb, packs the payload and the boot
