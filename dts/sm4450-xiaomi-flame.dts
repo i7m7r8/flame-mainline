@@ -178,16 +178,14 @@
 		#address-cells = <2>;
 		#size-cells = <2>;
 		ranges;
-		bootargs = "console=ttyMSM0,115200n8 loglevel=7 log_buf_len=4M kpti=0 "
-			 "swiotlb=noforce cgroup.memory=nokmem,nosocket "
-			 "transparent_hugepage=never loop.max_part=7 "
-			 "rcupdate.rcu_expedited=1 clk_ignore_unused pd_ignore_unused "
-			 "androidboot.hardware=qcom androidboot.memcg=1 "
-			 "androidboot.serialconsole=0 "
-			 "androidboot.usbcontroller=a600000.dwc3 "
-			 "androidboot.load_modules_parallel=true "
-			 "androidboot.vendor.qspa=true "
-			 "androidboot.bootdevice=1d84000.ufshc";
+		/* One literal, not several: dtc takes exactly one string per
+		 * property value and has never supported C-style concatenation,
+		 * so wrapping this is a fatal parse error rather than cosmetics.
+		 * The boot image header carries an empty cmdline, so this line is
+		 * the only thing the kernel sees before ABL's androidboot.* tags
+		 * are appended by the handover hook. Keep it under ~1.5 KiB:
+		 * COMMAND_LINE_SIZE is 2048 and those tags have to fit too. */
+		bootargs = "console=ttyMSM0,115200n8 loglevel=7 log_buf_len=4M kpti=0 swiotlb=noforce cgroup.memory=nokmem,nosocket transparent_hugepage=never loop.max_part=7 rcupdate.rcu_expedited=1 clk_ignore_unused pd_ignore_unused androidboot.hardware=qcom androidboot.memcg=1 androidboot.serialconsole=0 androidboot.usbcontroller=a600000.dwc3 androidboot.load_modules_parallel=true androidboot.vendor.qspa=true androidboot.bootdevice=1d84000.ufshc";
 		stdout-path = "serial0:115200n8";
 
 		framebuffer: framebuffer@b8000000 {
