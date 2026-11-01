@@ -1,18 +1,26 @@
 flame mainline boot image - how to flash
 =========================================
 
-Artifact: flame-mainline-boot.img
+Artifact: flame-mainline-final.img
   Android boot image header v4, os_version Android 17 (matching the ROM's own
-  boot.img), page 4096, no ramdisk, empty header cmdline. The kernel section is
-  the mainline arm64 Image plus sm4450-xiaomi-flame.dtb plus the EL1 handover
-  shim; the shim takes the DTB the bootloader built from the vendor tree out of
-  x0 and puts our board DTB there instead. See tools/shim.S and
-  docs/mainline-port.md.
+  boot.img), page 4096, empty header cmdline - field for field like the ROM's
+  image, so first stage sees the header it expects. Two sections:
 
-  IT DOES NOT BOOT AS IT IS. The ROM's first stage (/init) is the *generic
-  ramdisk* section of boot.img - vendor_boot's vendor ramdisk has no init at
-  all - and CI is not allowed to carry the ROM's bytes, so the artifact arrives
-  with ramdisk_size=0. Step 3 below attaches them from your own ROM copy.
+    kernel   the mainline arm64 Image plus sm4450-xiaomi-flame.dtb plus the EL1
+             handover shim, built in that run. The shim takes the DTB the
+             bootloader built from the vendor tree out of x0 and puts our board
+             DTB there instead; see tools/shim.S and docs/mainline-port.md.
+    ramdisk  the ROM's own generic ramdisk, 2600656 bytes, which is where this
+             ROM keeps /init. CI cannot build it and must not copy it from a
+             public place, so the job fetches it from the private
+             i7m7r8/flame-stock repo, checks its sha256 against
+             config/stock-ramdisk.sha256 in this repo, and attaches it with
+             tools/attach_rom_ramdisk.py. RAMDISK.txt says which hash went in.
+
+  flame-mainline-boot.img in the same artifact is the kernel with no ramdisk.
+  It is the input to that step, not something to flash: the ROM's vendor_boot
+  carries no /init either, so booting it gets a kernel that unpacks a rootfs
+  with no init and resets in a few seconds.
 
 Nothing else is replaced: vendor_boot, dtbo, vbmeta, super and the bootloader
 partitions keep the ROM's own content.
@@ -32,24 +40,14 @@ partitions keep the ROM's own content.
    stock/boot.img in the ROM package is byte-identical, so the ROM zip alone is
    also a valid restore.
 
-3. Attach the ROM's own first stage to the artifact (it only reads and copies):
-
-     python3 tools/attach_rom_ramdisk.py --boot flame-mainline-boot.img \
-             --rom-boot boot-stock.img -o flame-mainline-final.img
-
-   --rom-boot can be the backup from step 2 or the ROM package's own
-   stock/boot.img. The tool re-reads what it wrote and stops unless the kernel
-   and ramdisk sections are byte-identical to the inputs, so a mismatched ROM
-   revision shows up here rather than on the phone.
-
-4. Flash once, and only to that slot:
+3. Flash once, and only to that slot:
 
      fastboot flash boot_a flame-mainline-final.img     # if suffix is _a
      fastboot flash boot_b flame-mainline-final.img     # if suffix is _b
      fastboot --set-active=<same slot>
      fastboot reboot
 
-5. If it does not come up, hold Power+VolDown until fastboot and restore:
+4. If it does not come up, hold Power+VolDown until fastboot and restore:
 
      fastboot flash boot_<slot> stock/boot.img
      fastboot reboot
@@ -57,6 +55,18 @@ partitions keep the ROM's own content.
    The image either boots or sits in the shim's halt loop; it cannot write to
    anything but the boot slot it was flashed to, so there is no state to undo.
    See BOOT-SAFETY.txt.
+
+5. Optional, do this instead of step 3 if your ROM is not the build the private
+   repo holds, or if you would rather not take a runner's word for its bytes.
+   Attach the first stage from your own phone, which needs nothing but python3
+   and your backup from step 2:
+
+     python3 tools/attach_rom_ramdisk.py --boot flame-mainline-boot.img \
+             --rom-boot boot-stock.img -o flame-mainline-my-slot.img
+
+   The tool re-reads what it wrote and stops unless the kernel and ramdisk
+   sections are byte-identical to the inputs, so a mismatched ROM revision
+   shows up here rather than on the phone.
 
 6. If it boots to a reset in a few seconds instead of to Android, the reason is
    on the oops partition by the time you are back in the stock ROM (pstore on

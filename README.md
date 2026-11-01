@@ -6,8 +6,10 @@ RAM — packed as an Android boot image that boots the **existing Infinity X
 Android 17 userspace** in place. No GSI, no Android rebuild, no Debian: the
 ROM on `super` stays exactly as it is, only its kernel is replaced.
 
-Everything is built in GitHub Actions (`mainline kernel (flame)`). The one step
-that cannot happen in CI is the last one, described under "Use".
+The whole build runs in GitHub Actions (`mainline kernel (flame)`), including
+the last step that glues the ROM's first stage onto the kernel it just built —
+that part comes from a private repo, see below, so nothing proprietary is ever
+pushed here.
 
 ## The four things that make this work
 
@@ -23,10 +25,12 @@ that cannot happen in CI is the last one, described under "Use".
    ROM's init ramdisk, and the real DRAM map. See `docs/mainline-port.md`.
 2. **The ROM's first stage lives in *this* partition.** `/init` is in boot.img's
    *generic ramdisk* section — `vendor_boot`'s vendor ramdisk holds only
-   `/lib/modules` and has no init at all. CI may not carry the ROM's bytes, so
-   `flame-mainline-boot.img` arrives with `ramdisk_size=0` and does not boot as
-   it is. `tools/attach_rom_ramdisk.py` splices your own ROM's ramdisk section
-   back in byte for byte and keeps the stock `os_version` and header cmdline.
+   `/lib/modules` and has no init at all. Those bytes are Xiaomi's, so they are
+   not in this repository: CI fetches them from the private `i7m7r8/flame-stock`
+   repo, checks them against `config/stock-ramdisk.sha256`, and attaches them
+   with `tools/attach_rom_ramdisk.py`. `flame-mainline-final.img` is the result
+   and the thing to flash; `flame-mainline-boot.img` beside it is the kernel
+   with no ramdisk, which would reset in about ten seconds.
 3. **`CONFIG_MODULES=n` is not a blocker.** There is no `.ko` channel to this
    ROM, so the tree is built with everything built-in. First-stage init's
    "Failed to load kernel modules" fatal only fires when it *did* load at least
@@ -64,30 +68,43 @@ flame DTS through `tools/install_local.py` (anchored rules, idempotent, fails
 loudly rather than quietly dropping a driver), applies `config/flame.fragment`
 over `tinyconfig` with a value-level audit that fails the build on any dropped
 symbol, builds `Image` plus `qcom/sm4450-xiaomi-flame.dtb`, self-tests the
-shim, and packs `flame-mainline-boot.img` — boot v4, Android 17, patch level
-2026-10, empty header cmdline, field for field like the ROM's own image.
+shim, packs `flame-mainline-boot.img` — boot v4, Android 17, patch level
+2026-10, empty header cmdline, field for field like the ROM's own image — and
+then attaches the ROM's first stage from the private `i7m7r8/flame-stock` repo
+using the `STOCK_TOKEN` repository secret, hash-checking it against
+`config/stock-ramdisk.sha256` before and after. The attached image is the
+flashable one.
 
-Artifact `flame-mainline-<sha>`: `flame-mainline-boot.img`, `payload.bin`,
-`Image`, `sm4450-xiaomi-flame.dtb`, `sm4450-xiaomi-flame.cdt.dts`,
-`flame.config`, `enabled.txt`, `packing.txt`, `build.log`, `SHA256SUMS`,
-`FLASH.txt`, `BOOT-SAFETY.txt`, `RAMDISK.txt`.
+Artifact `flame-mainline-<sha>`: `flame-mainline-final.img`,
+`flame-mainline-boot.img`, `payload.bin`, `Image`, `sm4450-xiaomi-flame.dtb`,
+`sm4450-xiaomi-flame.cdt.dts`, `flame.config`, `enabled.txt`, `packing.txt`,
+`build.log`, `SHA256SUMS`, `FLASH.txt`, `BOOT-SAFETY.txt`, `RAMDISK.txt`. The
+ROM's ramdisk itself is downloaded to `$RUNNER_TEMP`, never to `out/`, so it is
+not in the artifact and not published.
 
 There is deliberately no artifact-content validation job and no rootfs job.
 
 ## Use
 
 ```sh
-# 1. take the ROM's own boot partition off the device
-adb shell "su 0 cp /dev/block/by-name/boot$(getprop ro.boot.slot_suffix) /sdcard/stock-boot.img"
-
-# 2. splice its generic ramdisk into the CI image
-python3 tools/attach_rom_ramdisk.py --boot flame-mainline-boot.img \
-          --rom-boot stock-boot.img -o flame-mainline-final.img
+gh run download --repo i7m7r8/flame-mainline <run-id> -n flame-mainline-<sha>
+fastboot flash boot_<slot the ROM boots from> flame-mainline-final.img
+fastboot --set-active=<same slot>
+fastboot reboot
 ```
 
-Then flash `flame-mainline-final.img` to that same slot, and nothing else.
-`flash-boot.txt` (also shipped as `FLASH.txt`) is the full procedure, including
-what to read back if the phone resets after a few seconds.
+`flash-boot.txt` (shipped as `FLASH.txt`) is the full procedure, including the
+restore path and what to read back if the phone resets after a few seconds.
+
+If your ROM is not the build `flame-stock` holds, or you would rather not take a
+runner's word for those bytes, dump your own partition and attach it locally —
+the same tool, the same byte-identity rules:
+
+```sh
+adb shell "su 0 cp /dev/block/by-name/boot$(getprop ro.boot.slot_suffix) /sdcard/boot-stock.img"
+python3 tools/attach_rom_ramdisk.py --boot flame-mainline-boot.img \
+          --rom-boot boot-stock.img -o flame-mainline-mine.img
+```
 
 ## Layout
 

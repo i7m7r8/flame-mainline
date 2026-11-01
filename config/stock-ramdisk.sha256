@@ -1,0 +1,5 @@
+cc38f4951ebd12137caef95a6b7ddb91715634bc558ec577e2d0e1c42b749f8b  ramdisk.img
+# ROM first stage: the generic ramdisk section of Infinity X Android 17
+# boot.img, held in the private i7m7r8/flame-stock repo and fetched by CI. This
+# hash is the only thing about it that can be public. sha256sum -c format, so
+# `sha256sum -c config/stock-ramdisk.sha256` works next to the download.

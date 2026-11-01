@@ -161,18 +161,27 @@ ABL concatenates generic + vendor ramdisks into one LZ4 legacy stream and points
 halves as one buffer as long as our image supplies the first; `tools/mklz4legacy.py`
 exists because our own half has to be framed the same way when we build one.
 
-Those bytes belong to the ROM, so they are not in this repository and CI cannot
-pack them. The last step runs where the ROM is, and only copies:
+Those bytes belong to the ROM, so they are not in this public repository. They
+live in the private `i7m7r8/flame-stock` repo as `ramdisk.img` - nothing else,
+no kernel and no firmware - and the last CI step downloads them with the
+`STOCK_TOKEN` repository secret into `$RUNNER_TEMP` (never into `out/`, which
+`upload-artifact` would publish), checks the hash against
+`config/stock-ramdisk.sha256`, and attaches them:
 
 ```
 python3 tools/attach_rom_ramdisk.py --boot flame-mainline-boot.img \
-        --rom-boot /path/to/the/ROMs/own/boot.img -o flame-mainline-final.img
+        --rom-ramdisk "$RUNNER_TEMP/ramdisk.img" -o flame-mainline-final.img
 ```
 
 It re-packs the *same* kernel bytes with the ROM's ramdisk section, re-derives
 `os_version` and the header cmdline from the ROM's header, and then reads its own
 output back and refuses to finish unless both sections are byte-identical to the
 inputs.
+
+`--rom-boot` takes the phone's own `boot.img` instead, which is the route to use
+if the ROM on the device is not the build `flame-stock` holds: dump the slot's
+partition, run the same command against that. `RAMDISK.txt` in the artifact
+records which hash went into the image you downloaded.
 
 **Module loading does not block us, and no kernel-side lie is needed.** The
 first stage ends with `LOG(FATAL) << "Failed to load kernel modules"`, which
@@ -230,8 +239,9 @@ LOCAL    = dts/sm4450-xiaomi-flame.dts, flame panel/touch drivers, handover hook
            config fragment (CONFIG_MODULES=n: no .ko is loadable or deliverable)
 OUTPUT   = out/flame-mainline-boot.img  (+ Image, dtb, payload.bin, SHA256SUMS)
 FINAL    = tools/attach_rom_ramdisk.py adds the ROM's own generic ramdisk
-           (/init); it is the only step that needs a ROM file, and it runs on
-           the machine that has the ROM
+           (/init), fetched in the job from the private i7m7r8/flame-stock repo
+           with the STOCK_TOKEN secret and hash-checked first; the step fails
+           the build rather than publish an image that cannot boot
 ```
 
 ## Getting the log out of a boot that does not finish

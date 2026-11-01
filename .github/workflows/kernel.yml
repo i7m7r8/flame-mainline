@@ -336,37 +336,72 @@ jobs:
           PY
           cp "$GITHUB_WORKSPACE/flash-boot.txt" FLASH.txt
           cp "$GITHUB_WORKSPACE/boot-safety.txt" BOOT-SAFETY.txt
-          # One thing is deliberately missing from this image: the ROM's
-          # first-stage init. /init lives in boot.img's generic ramdisk (the
-          # vendor ramdisk in vendor_boot holds only lib/modules and system/bin
-          # and no init at all), and those bytes belong to the ROM, so they are
-          # not in this repository and cannot be packed here. Booting this
-          # image as-is gets a kernel that unpacks a rootfs with no init and
-          # resets. Attaching the ramdisk is the one step that has to happen
-          # where the ROM is:
-          python3 - <<'PY' > RAMDISK.txt
+          # What is packed here is the kernel only, on purpose: the ROM's
+          # first-stage init is Xiaomi's bytes and does not belong in a public
+          # repository. The next step fetches them from the private repo that
+          # holds nothing else and hash-checks them, so the artifact a user
+          # downloads is the one that actually boots.
+          python3 - <<'PY'
           import struct
           d = open('flame-mainline-boot.img', 'rb').read(4096)
           assert d[:8] == b'ANDROID!', d[:8]
-          ks, rs = struct.unpack_from('<2I', d, 8)
-          assert rs == 0, f'expected no ramdisk from CI, got {rs} bytes'
-          print("Attach the ROM's own first-stage ramdisk, then flash the result:")
-          print()
-          print('  python3 tools/attach_rom_ramdisk.py \\')
-          print('    --boot  flame-mainline-boot.img \\')
-          print('    --rom-boot /path/to/the/ROMs/own/boot.img \\')
-          print('    -o      flame-mainline-final.img')
-          print()
-          print('Your own copy works; on the running ROM:')
-          print('  su 0 cp /dev/block/by-name/boot$(getprop ro.boot.slot_suffix) '
-                  '/sdcard/stock-boot.img')
-          print()
-          print(f'(this image: kernel {ks} bytes, ramdisk {rs} bytes, so no /init)')
+          assert struct.unpack_from('<I', d, 12)[0] == 0, \
+              'this step packs the kernel section only'
           PY
-          cat RAMDISK.txt >> "$GITHUB_STEP_SUMMARY"
           sha256sum Image sm4450-xiaomi-flame.dtb payload.bin \
             flame-mainline-boot.img > SHA256SUMS
-          ls -lh flame-mainline-boot.img payload.bin
+
+      - name: Attach the ROM's first stage
+        env:
+          STOCK_TOKEN: ${{ secrets.STOCK_TOKEN }}
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE/out"
+          # /init is the generic ramdisk section of the ROM's boot.img -
+          # vendor_boot's vendor ramdisk has no init at all - so this is the
+          # step that turns a kernel image into a bootable one. Downloaded
+          # outside out/ because upload-artifact would publish it: this
+          # repository is public, the bytes are not ours.
+          if [ -z "$STOCK_TOKEN" ]; then
+            echo "STOCK_TOKEN is not set as a repository secret, so there is no" \
+                 "first stage to attach and any artifact would reset at boot." >&2
+            exit 1
+          fi
+          curl -fsSL -H "Authorization: Bearer $STOCK_TOKEN" \
+            -o "$RUNNER_TEMP/ramdisk.img" \
+            https://raw.githubusercontent.com/i7m7r8/flame-stock/main/ramdisk.img
+          ( cd "$RUNNER_TEMP" && sha256sum -c \
+              "$GITHUB_WORKSPACE/config/stock-ramdisk.sha256" )
+          python3 "$GITHUB_WORKSPACE/tools/attach_rom_ramdisk.py" \
+            --boot flame-mainline-boot.img \
+            --rom-ramdisk "$RUNNER_TEMP/ramdisk.img" \
+            -o flame-mainline-final.img
+          # The tool re-reads its own output and stops unless the kernel and the
+          # ramdisk sections are byte-identical to the two inputs, so arriving
+          # here is the check. Only the packed image is published; ramdisk.img
+          # stays in $RUNNER_TEMP, which the runner deletes.
+          sha256sum flame-mainline-final.img >> SHA256SUMS
+          {
+            echo "flame-mainline-final.img is the image to flash."
+            echo
+            echo "  kernel section: built in this run (payload.bin = Image + flame dtb + shim)"
+            echo "  ramdisk section: the ROM's own generic ramdisk, 2600656 bytes,"
+            echo "    sha256 $(awk '/^[0-9a-f][0-9a-f][0-9a-f]/{print $1; exit}' \
+                    "$GITHUB_WORKSPACE/config/stock-ramdisk.sha256"),"
+            echo "    fetched from the private i7m7r8/flame-stock repo and hash-checked here."
+            echo
+            echo "That section is Infinity X Android 17's. If the ROM you are on is not"
+            echo "the same build, or you would rather not take a runner's word for it,"
+            echo "attach your own copy of it and flash that instead:"
+            echo
+            echo "  su 0 cp /dev/block/by-name/boot\$(getprop ro.boot.slot_suffix) /sdcard/boot-stock.img"
+            echo "  python3 tools/attach_rom_ramdisk.py --boot flame-mainline-boot.img \\"
+            echo "          --rom-boot boot-stock.img -o flame-mainline-final.img"
+            echo
+            echo "FLASH.txt is the full procedure either way."
+          } > RAMDISK.txt
+          cat RAMDISK.txt >> "$GITHUB_STEP_SUMMARY"
+          ls -lh flame-mainline-boot.img flame-mainline-final.img
           cat SHA256SUMS
 
       - name: Upload artifacts
