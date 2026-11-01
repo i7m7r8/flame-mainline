@@ -3164,19 +3164,33 @@
 
 /* sm4450.dtsi leaves /memory to the bootloader ("We expect the bootloader to
  * fill in the size"), and ABL does fill it in - but only in the tree it builds
- * for the vendor kernel, which the shim swaps out for ours. So the size has to
- * be stated here. It is not measured yet, and until it is this is deliberately
- * the smallest region that is certainly RAM: every carveout in the vendor tree
- * ends by 0xfa480000, and nothing here goes past that, because under-declaring
- * costs memory while over-declaring hands the page allocator addresses that
- * are not memory at all. A 4 GB part also needs a second region above
- * 0x100000000; the vendor's alloc-ranges reaching 0x1_00000000 says one exists,
- * but no offline source says where it ends. */
+ * for the vendor kernel, which the shim swaps out for ours.
+ * handover_memory_fixup() (CONFIG_ARM64_HANDOVER_CMDLINE) reads ABL's answer
+ * out of the parked tree and rewrites this property before memblock ever sees
+ * it, so the number that ships here is only the fallback for a boot where that
+ * read fails - no shim, a tree whose /memory fell outside the 256 KiB window
+ * the early fixmap allows, or a kernel built without the option.
+ *
+ * The fallback is deliberately the smallest region that is certainly RAM: every
+ * carveout in the vendor tree ends by 0xfa480000, and nothing here goes past
+ * that, because under-declaring costs memory while over-declaring hands the page
+ * allocator addresses that are not memory at all. A 4 GB part also has a second
+ * bank above 0x100000000 - the vendor's alloc-ranges reaching 0x1_00000000 says
+ * so - which is exactly the thing no offline source can pin down, and one of the
+ * reasons the graft is worth having.
+ *
+ * Three slots, not one, because fdt_setprop_inplace() can only ever fill the
+ * bytes a property already has; the graft writes as many ranges as the
+ * firmware reports, up to this many. The repeats are the "unused slot" trick:
+ * memblock folds duplicate ranges into the first without a word, where a
+ * zero-length one would print "Ignoring memory block" on every boot. */
 / {
 	/delete-node/ memory@a0000000;
 
 	memory@80000000 {
 		device_type = "memory";
-		reg = <0x0 0x80000000 0x0 0x68e00000>; /* PROVISIONAL: verify from live DT */
+		reg = <0x0 0x80000000 0x0 0x68e00000>,
+		      <0x0 0x80000000 0x0 0x68e00000>,
+		      <0x0 0x80000000 0x0 0x68e00000>;
 	};
 };

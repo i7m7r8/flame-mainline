@@ -118,32 +118,37 @@ recovery. See `boot-safety.txt`.
 ## Build recipe (CI)
 
 ```
-KERNEL   = stable 7.2.x (upstream tag, not a vendor fork)
+KERNEL   = stable 7.1.2 (upstream tag, not a vendor fork)
 PATCHSET = ROCKNIX/distribution@next projects/ROCKNIX/devices/SM4450/patches/linux/*.patch
-LOCAL    = dts/sm4450-xiaomi-flame.dts, flame panel/touch drivers, config fragment
-OUTPUT   = out/flame-mainline-boot_b.img  (+ Image, dtb, SHA256SUMS)
+LOCAL    = dts/sm4450-xiaomi-flame.dts, flame panel/touch drivers, handover hook,
+           config fragment (CONFIG_MODULES=n: no .ko is loadable or deliverable)
+OUTPUT   = out/flame-mainline-boot.img  (+ Image, dtb, payload.bin, SHA256SUMS)
 ```
 
-`make ARCH=arm64 defconfig` + `config/flame.fragment`, then
-`make Image dtbs modules`, then the shim/boot packing steps from
-`tools/` (`mklinuxpayload.py`, `mkshim.py`, `repack_bootimg.py`).
+`.github/workflows/kernel.yml` is the only workflow: it self-tests the shim
+under qemu, builds `Image` and flame's dtb, packs the payload and the boot
+image, and asserts the packing math against the bytes it produced. Nothing in
+CI builds a rootfs any more; the ROM is the rootfs.
 
 ## Milestones
 
 | # | exit condition | how it is measured |
 |---|----------------|--------------------|
-| P0 | patchset applies to 7.2 and `Image`+`dtbs` build | CI green |
+| P0 | patchset applies to 7.1.2 and `Image` + flame dtb build, every fragment symbol still `=y` | CI green |
 | P1 | shim boots mainline and the console comes up on `ttyGS0` (ACM gadget) + `earlycon` on uart@a88000 | USB serial log from the phone |
-| P2 | rootfs mount: UFS (`ufshc@1d84000`, ICE) and microSD (`sdhci@8804000`, CD gpio 101) | `lsblk`, boot into Debian |
-| P3 | screen: c3f DSI panel (720x1640@120, DCS init blob, DCS backlight) | visible Phosh/desktop |
-| P4 | touch: focaltech@38 on `i2c@984000` (irq 13, reset 12) | `evtest` |
-| P5 | power: regulator set, battmgr/charger, pon power key, thermal, vibrator | `powercap`/`iio` readouts |
-| P6 | GPU: a613 + a6xx GGU/zap, SMMU re-parented off `kgsl-iommu` | `glmark2` |
-| P7 | Wi-Fi/BT: icnss→mainline path or WCN3990 port (`hci_qca` for BT) | `iwctl` scan |
-| P8 | audio (LPASS macros + AW88166 smartpa), camera = declared out of scope | `wpctl` |
-| P9 | modem/RIL: MBIM over the vendor's own USB mode or give up | `mmcli` |
+| P2 | the ROM's own userspace reaches boot: handover recovers `androidboot.*` and the first-stage ramdisk, `super`/`/vendor` mount | `adb shell getprop`, no first-stage panic |
+| P3 | display: c3f DSI panel driven by `drm/msm` + `panel-xiaomi-c3f`, and SurfaceFlinger composes on it | screen on, `dumpsys SurfaceFlinger` |
+| P4 | touch: focaltech@38 on `i2c@984000` (irq 13, reset 12) | `getevent -l` |
+| P5 | power: regulator set, battmgr/charger, pon power key, thermal, vibrator | `dumpsys battery`, `getevent` |
+| P6 | GPU: a613 + a6xx GGU/zap, SMMU re-parented off `kgsl-iommu` | `dumpsys gpu`, glmark2 from a terminal app |
+| P7 | Wi-Fi/BT: WCN3990 path (`hci_qca` for BT) | `cmd wifi status`, `hcitool scan` |
+| P8 | audio: LPASS macros + WCD938x + AW88166 smartpa over glink/APR | audio out of the speaker at boot |
+| P9 | camera and modem: vendor ISP/RIL blobs against a mainline kernel, declared the hardest part of the port | preview in the stock camera app |
 
-Each milestone is a `boot_b` flash by the user (this workspace has no fastboot),
-so every CI artifact must be a single flashable image plus a one-line
-`FLASH.txt`, and a failure must always be recoverable with
-`fastboot --set-active=a`.
+P2 is the whole reason the handover shim exists: without the ROM's
+`androidboot.*` tags and its ramdisk, first-stage init never gets to mounting
+`super`, and nothing after that can be observed. Each milestone is one
+`boot_<slot>` flash by the user (this workspace has no fastboot), so every CI
+artifact must be a single flashable image plus a one-line `FLASH.txt`, and a
+failure must always be reversible by flashing the ROM's own `boot.img` back.
+

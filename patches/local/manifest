@@ -10,8 +10,8 @@ drivers/gpu/drm/panel/Kconfig | ^endmenu$ | before | DRM_PANEL_XIAOMI_C3F | \nco
 
 drivers/input/touchscreen/edt-ft5x06.c | \.compatible = "focaltech,ft8719" | after | focaltech,ft8726 | \t{ .compatible = "focaltech,ft8726", .data = &edt_ft8719_data },
 
-# The handover hook. Three rules, because the object has to be built, the
-# option has to exist, and setup_arch has to call it.
+# The handover hook. Four rules, because the object has to be built, the option
+# has to exist, and the two jobs have two different call sites.
 #
 # The Makefile anchor is deliberately `obj-y += head.o` rather than the obj-y
 # list at the top of the file: that list is one backslash-continued statement
@@ -21,14 +21,21 @@ drivers/input/touchscreen/edt-ft5x06.c | \.compatible = "focaltech,ft8719" | aft
 
 arch/arm64/kernel/Makefile | ^obj-y\s*\+= head\.o$ | after | ARM64_HANDOVER_CMDLINE | obj-$(CONFIG_ARM64_HANDOVER_CMDLINE)\t\t+= handover.o
 
-arch/arm64/Kconfig | ^source "kernel/livepatch/Kconfig"$ | after | ARM64_HANDOVER_CMDLINE | \nconfig ARM64_HANDOVER_CMDLINE\n\tbool "Recover the bootloader's /chosen through the EL1 handover shim"\n\tdepends on OF\n\thelp\n\t  The flame boot image starts with an EL1 shim that enters the kernel\n\t  with our own device tree, because the one the Qualcomm bootloader\n\t  builds binds only vendor drivers. That tree also carries what ABL\n\t  injected at run time: the androidboot.* tags init needs to find the\n\t  active slot and the AVB chain, and the address of the ROM's first\n\t  stage init ramdisk. With this on, the shim parks that tree in a\n\t  reserved region and this hook grafts those two pieces onto our own\n\t  boot.\n\n\t  If unsure, say N: a kernel without it boots normally but cannot run\n\t  an Android userspace that mounts /vendor.\n
+arch/arm64/Kconfig | ^source "kernel/livepatch/Kconfig"$ | after | ARM64_HANDOVER_CMDLINE | \nconfig ARM64_HANDOVER_CMDLINE\n\tbool "Recover the bootloader's device tree through the EL1 handover shim"\n\tdepends on OF\n\thelp\n\t  The flame boot image starts with an EL1 shim that enters the kernel\n\t  with our own device tree, because the one the Qualcomm bootloader\n\t  builds binds only vendor drivers. That tree also carries what ABL\n\t  injected at run time: the androidboot.* tags init needs to find the\n\t  active slot and the AVB chain, the address of the ROM's first\n\t  stage init ramdisk, and the DRAM map read from the memory\n\t  controller. With this on, the shim parks that tree in a reserved\n\t  region and these hooks graft the three of them onto our own boot.\n\n\t  If unsure, say N: a kernel without it boots normally but cannot run\n\t  an Android userspace that mounts /vendor.\n
 
-# setup.c: include the prototype, then call it. The call goes after
-# paging_init() because that is what builds the linear map the parked tree is
-# read through, and it must precede mm_init(), where the page allocator takes
-# every page memblock has not been told to keep. asm/handover.h compiles to a
-# no-op stub when the option is off, so the call site needs no ifdef.
+# setup.c: include the prototype, then call it. The command line and the ramdisk
+# go after paging_init(), because that is what builds the linear map the parked
+# tree is read through, and must precede mm_init(), where the page allocator
+# takes every page memblock has not been told to keep. asm/handover.h compiles
+# to a no-op stub when the option is off, so neither call site needs an ifdef.
 
 arch/arm64/kernel/setup.c | ^#include <asm/setup.h>$ | after | asm/handover.h | #include <asm/handover.h>
 
 arch/arm64/kernel/setup.c | ^\tpaging_init\(\);$ | after | handover_cmdline_extend(); | \thandover_cmdline_extend();	/* flame: see arch/arm64/kernel/handover.c */
+
+# The memory graft has the opposite timing: memblock gets its ranges from the
+# flat-tree scan here, and paging_init() builds the linear map out of exactly
+# those, so this one has to land between the mapping of our own tree and the
+# scan of it.
+
+arch/arm64/kernel/setup.c | ^\tif \(!early_init_dt_scan\(dt_virt, dt_phys\)\) \{$ | before | handover_memory_fixup(dt_virt, dt_phys); | \thandover_memory_fixup(dt_virt, dt_phys);	/* flame: ABL has the DRAM map, our DTS can only guess it */
