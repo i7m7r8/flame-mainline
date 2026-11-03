@@ -358,6 +358,14 @@ CONFIG_DEBUG_KERNEL=y
 CONFIG_FTRACE=y
 CONFIG_KALLSYMS=y
 CONFIG_PRINTK_TIME=y
+# An oops that does not panic is a message in a buffer nobody reads: the
+# kmsg_dump that writes the pstore record runs from the panic path, so a
+# non-fatal oops leaves a dead thread, a first stage that carries on broken and
+# no record at all.  Stock sets it (=y with panic_on_oops=1 in its own config);
+# 7.1.2 has no PANIC_ON_OOPS_VALUE symbol any more, the bool is the whole knob.
+# With PANIC_TIMEOUT left at its 0 default the resulting panic then halts with
+# the text still on the panel instead of rebooting over it.
+CONFIG_PANIC_ON_OOPS=y
 # A CPU stuck in a kernel loop is the other failure that looks like nothing: no
 # panic, no oops, no record, the panel frozen mid-line. Stock runs the same
 # detectors, and a hard lockup panicking is what turns it into a pstore record
@@ -816,6 +824,13 @@ CONFIG_NLS_CODEPAGE_437=y
 CONFIG_NLS_UTF8=y
 CONFIG_PM_WAKELOCKS=y
 CONFIG_PM_WAKELOCKS_LIMIT=0
+# ART's concurrent-copying GC and lmkd's page-pin path both call userfaultfd(2)
+# and both were built against a stock kernel that has it (=y in stock/gki.config
+# and in the extracted vendor config).  7.1.2 still defines the symbol, so this
+# is not a porting gap, it is a line the first audit missed: with it off the
+# syscall returns ENOSYS, and ART's concurrent-copying collector - what
+# system_server is configured to use - cannot initialize without it.
+CONFIG_USERFAULTFD=y
 
 # ---- bpf, probes and the per-process knobs userspace reads
 # bpfloader installs cgroup/sk_msg programs and the LSM= line above ends in
