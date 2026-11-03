@@ -189,8 +189,22 @@
 		 * fbcon=map:0 is what puts the boot log on the panel through the
 		 * framebuffer node below; see the FB_SIMPLE comment in
 		 * config/flame.fragment for why that is a log channel and not
-		 * cosmetics. */
-		bootargs = "console=ttyMSM0,115200n8 loglevel=7 log_buf_len=4M fbcon=map:0 kpti=0 swiotlb=noforce cgroup.memory=nokmem,nosocket transparent_hugepage=never loop.max_part=7 rcupdate.rcu_expedited=1 clk_ignore_unused pd_ignore_unused androidboot.hardware=qcom androidboot.memcg=1 androidboot.serialconsole=0 androidboot.usbcontroller=a600000.dwc3 androidboot.load_modules_parallel=true androidboot.vendor.qspa=true androidboot.bootdevice=1d84000.ufshc qcom_ice.use_wrapped_keys=1 pstore_blk.best_effort=1 pstore.kmsg_bytes=262144 initcall_debug";
+		 * cosmetics.
+		 *
+		 * console=tty0 has to be named as well, and it is not redundant.
+		 * A console driver is only enabled if it matches an entry in the
+		 * preferred-console list (kernel/printk/printk.c register_console
+		 * -> try_enable_preferred_console, and an unmatched driver is
+		 * dropped without being registered). Nothing on arm64 puts "tty" 0
+		 * on that list by itself - only drivers/of/base.c
+		 * of_console_check() does the equivalent, for the stdout-path
+		 * device, and it bails out as soon as any console= appears on the
+		 * command line. So without this token the VT/fbcon pair is built,
+		 * bound to the framebuffer, and never printed to: map:0 alone picks
+		 * which framebuffer a console uses, not whether it is a console.
+		 * ttyMSM0 stays last so it keeps /dev/console, which is what
+		 * stdout-path asks for. */
+		bootargs = "console=tty0 console=ttyMSM0,115200n8 loglevel=7 log_buf_len=4M fbcon=map:0 kpti=0 swiotlb=noforce cgroup.memory=nokmem,nosocket transparent_hugepage=never loop.max_part=7 rcupdate.rcu_expedited=1 clk_ignore_unused pd_ignore_unused androidboot.hardware=qcom androidboot.memcg=1 androidboot.serialconsole=0 androidboot.usbcontroller=a600000.dwc3 androidboot.load_modules_parallel=true androidboot.vendor.qspa=true androidboot.bootdevice=1d84000.ufshc qcom_ice.use_wrapped_keys=1 pstore_blk.best_effort=1 pstore.kmsg_bytes=262144 initcall_debug";
 		stdout-path = "serial0:115200n8";
 
 		framebuffer: framebuffer@b8000000 {

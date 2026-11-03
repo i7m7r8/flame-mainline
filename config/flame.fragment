@@ -176,6 +176,9 @@ CONFIG_FB_SIMPLE=y
 # FRAMEBUFFER_CONSOLE_DETECT_PRIMARY, so that heuristic cannot be turned off
 # from a fragment - the fbcon=map:0 in the bootargs is what overrides it, and
 # the console goes to the first framebuffer regardless of what stdout-path says.
+# map:0 only chooses the framebuffer; the console itself has to be named, so the
+# bootargs also carry console=tty0 (see the comment over bootargs in the dts for
+# why an unmatched console driver is not enabled at all).
 CONFIG_LOGO=y
 CONFIG_SYNC_FILE=y
 CONFIG_UDMABUF=y
