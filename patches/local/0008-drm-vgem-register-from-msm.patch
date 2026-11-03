@@ -1,0 +1,92 @@
+drm/vgem: register from the real driver instead of an initcall
+
+DRM hands out primary and render minors from one xarray in registration
+order (drivers/gpu/drm/drm_drv.c: drm_minor_get_xa(), drm_minor_alloc(),
+DRM_MINOR_LIMIT()), so whoever registers first owns card0 and renderD128.
+On this device that ordering decides whether the display works at all.
+
+The ROM's /vendor/etc/selinux/vendor_file_contexts labels exactly three
+/dev/dri names as graphics_device - card0, controlD64, renderD128 - and
+plat_sepolicy.cil grants graphics_device chr_file to four domains
+(surfaceflinger, hal_composer, gpuservice, charger_type) while neverallowing
+it to untrusted_app, isolated_app and shell. Anything not named by those
+three entries falls back to the `device` type, which no domain may open. So
+if vgem registers first it eats card0/renderD128 and the real MSM card lands
+on card1/renderD129, where nothing can open it, and the UI goes dark.
+
+Calling vgem_init() from msm's bind path, right after its own
+drm_dev_register() succeeded, fixes that without any numbering trick: msm
+takes card0, controlD64 and renderD128 (exactly the three names the ROM
+already labels), and vgem lands on card1/renderD129. That renderD129 is the
+path libgsl.so's gsl_ioctl_init() gates its DRM backend on with
+access(..., F_OK), so it only has to exist; ioctl_drm_driver_entry()
+readdir()s /dev/dri and picks the card whose DRM_IOCTL_VERSION driver name is
+"msm", and it logs and continues when an individual open() fails, which is
+what the unreachable vgem node does.
+
+DAC is not in the way: /system/etc/ueventd.rc line 60 is
+`/dev/dri/*   0666   root   graphics`, a wildcard, and the stock GKI Image
+carries no devtmpfs at all (extract-ikconfig: "# CONFIG_DEVTMPFS is not
+set"), so ueventd has always owned these nodes' permissions.
+
+Requires CONFIG_DRM_VGEM=y: the call is in-tree, so a modular vgem would not
+link.
+
+---
+--- a/drivers/gpu/drm/vgem/vgem_drv.c
++++ b/drivers/gpu/drm/vgem/vgem_drv.c
+@@ -124,11 +124,19 @@
+ 	.minor	= DRIVER_MINOR,
+ };
+ 
+-static int __init vgem_init(void)
++/* flame: no initcall any more, and not __init either. The board's real DRM
++ * driver calls this from its bind path once its own card is registered, so
++ * that it keeps card0 and renderD128; a component bind can happen after init
++ * memory is freed, which is why the marking has to go.
++ */
++int vgem_init(void)
+ {
+ 	int ret;
+ 	struct faux_device *fdev;
+ 
++	if (vgem_device)
++		return 0;
++
+ 	fdev = faux_device_create("vgem", NULL, NULL);
+ 	if (!fdev)
+ 		return -ENODEV;
+@@ -163,7 +171,7 @@
+ 	return ret;
+ }
+ 
+-static void __exit vgem_exit(void)
++static void vgem_exit(void)
+ {
+ 	struct faux_device *fdev = vgem_device->faux_dev;
+ 
+@@ -172,7 +180,6 @@
+ 	faux_device_destroy(fdev);
+ }
+ 
+-module_init(vgem_init);
+ module_exit(vgem_exit);
+ 
+ MODULE_AUTHOR("Red Hat, Inc.");
+--- a/drivers/gpu/drm/vgem/vgem_drv.h
++++ b/drivers/gpu/drm/vgem/vgem_drv.h
+@@ -39,6 +39,14 @@
+ 	struct mutex fence_mutex;
+ };
+ 
++/*
++ * vgem_init() is normally reached through module_init(). On flame it is called
++ * from msm's component bind instead, so that msm - and not vgem - owns card0
++ * and renderD128, the only DRM nodes the ROM's SELinux labels let any domain
++ * open; see patches/local/0008-drm-vgem-register-from-msm.patch.
++ */
++int vgem_init(void);
++
+ int vgem_fence_open(struct vgem_file *file);
+ int vgem_fence_attach_ioctl(struct drm_device *dev,
+ 			    void *data,

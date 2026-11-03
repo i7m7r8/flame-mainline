@@ -168,9 +168,21 @@ CONFIG_DRM_FBDEV_OVERALLOC=100
 # render* node, opening each and matching DRM_IOCTL_VERSION's driver name, so
 # it lands on the real msm node whichever number it ended up with. vgem
 # (DRIVER_GEM | DRIVER_RENDER, no hardware behind it) is what makes the second
-# node exist: with msm and vgem both registered the two render minors are 128
-# and 129 in an order that depends only on initcall timing, and the name match
-# makes that order irrelevant. Nothing hardcodes a card path either - the
+# node exist.
+#
+# Which card gets which number is not something that can be left to chance
+# here, and that is what patches/local/0008 and the manifest rule after it fix:
+# primary and render minors come out of one xarray in registration order, and
+# /vendor/etc/selinux/vendor_file_contexts labels exactly card0, controlD64 and
+# renderD128 as graphics_device - everything else is plain `device`, which
+# plat_sepolicy.cil lets no domain open. vgem's own initcall used to win the
+# race (msm only registers when its components bind), so vgem took card0 and
+# renderD128 and the real GPU landed on renderD129, where nothing can open it:
+# dark screen, not a slow one. msm is now registered first and calls vgem_init()
+# itself, so the three labelled names are the real driver's and vgem sits at
+# renderD129 as the placeholder libgsl only needs to see.  Requires =y, not =m:
+# that is a direct call.
+# Nothing hardcodes a card path either - the
 # composer reaches the display through libdrm's name-based drmOpen("msm"), and
 # libsdedrm.so contains no /dev/dri string at all.
 #
@@ -923,6 +935,82 @@ CONFIG_SCHEDSTATS=y
 CONFIG_DEBUG_INFO=y
 CONFIG_DEBUG_INFO_REDUCED=n
 CONFIG_DEBUG_INFO_BTF=y
+
+# ---- what the stock GKI config has and this one did not
+# Checked one by one against stock/gki.config, the /proc/config-equivalent of
+# the 6.6.82 GKI kernel this ROM ships, which is the only honest statement of
+# what its userspace was built expecting.  Anything stock has as =m is a
+# feature whose interface the ROM opens later through a .ko; with
+# CONFIG_MODULES=n there is no later, so it has to be =y here or the interface
+# simply never exists.  Four symbols on the same candidate list are deliberately
+# NOT set because stock does not have them either - CRYPTO_USER_API,
+# CRYPTO_USER_API_AEAD, USB_CONFIGFS_F_PRINTER, USB_CONFIGFS_F_UAC1 - and adding
+# an interface nothing asks for is attack surface and Image bytes, not a
+# feature.  All of these were verified to survive the CI merge below
+# (defconfig -> =m demotion -> merge -> olddefconfig), which is why none of them
+# is a symbol that merely exists: DRM_TTM, USB_VIDEO_CLASS, V4L2_MEM2MEM_DEV and
+# VIDEOBUF2_DMA_CONTIG are real Kconfig names that olddefconfig still will not
+# turn on here, and a fragment line for any of them would fail the =y audit.
+
+# V4L2/media controller, as stock has it.  CamX opens /dev/media%d and runs
+# MEDIA_IOC_DEVICE_INFO and ENUM_ENTITIES on it; those ioctls are only served
+# when CONFIG_MEDIA_CONTROLLER is on, and without the media device the HAL's
+# pipeline setup has nothing to enumerate (see the camera section of
+# docs/mainline-port.md for what it then does on this SoC).
+CONFIG_MEDIA_SUPPORT=y
+CONFIG_MEDIA_CAMERA_SUPPORT=y
+CONFIG_MEDIA_PLATFORM_SUPPORT=y
+CONFIG_MEDIA_CONTROLLER=y
+CONFIG_VIDEO_DEV=y
+CONFIG_V4L2_ASYNC=y
+CONFIG_V4L2_FWNODE=y
+CONFIG_VIDEOBUF2_CORE=y
+CONFIG_VIDEOBUF2_MEMOPS=y
+CONFIG_VIDEOBUF2_VMALLOC=y
+CONFIG_VIDEOBUF2_DMA_SG=y
+CONFIG_VIDEOBUF2_V4L2=y
+
+# Thermal, as stock has it: THERMAL_NETLINK is what serves /dev/thermal, the
+# netlink family the Android thermal HAL reads trip and cooling-device state
+# from; the two governors are the ones a userspace governor (thermal-engine in
+# the ROM) can fall back to.
+CONFIG_THERMAL_NETLINK=y
+CONFIG_THERMAL_GOV_BANG_BANG=y
+CONFIG_THERMAL_GOV_USER_SPACE=y
+CONFIG_CPU_FREQ_GOV_POWERSAVE=y
+CONFIG_DEVFREQ_GOV_POWERSAVE=y
+
+# Type-C, as stock has it.  android.hardware.usb and the display HAL look at
+# /sys/class/typec/ and at the altmode devices for DP over USB-C; TYPEC itself
+# was already set above, this is the port controller side of it.
+CONFIG_TYPEC_TCPM=y
+CONFIG_TYPEC_TCPCI=y
+CONFIG_TYPEC_DP_ALTMODE=y
+
+# Flash LED class: the torch and camera HALs drive the flashlight through the
+# flash-specific attributes (flash_brightness, flash_strobe, flash_timeout) that
+# only exist under LEDS_CLASS_FLASH, and INPUT_FF_MEMLESS is the force-feedback
+# backend the vibrator's input device registers.
+CONFIG_LEDS_CLASS_FLASH=y
+CONFIG_INPUT_FF_MEMLESS=y
+
+# Subsystem debug and rpmsg char devices, both =y in stock.  REMOTEPROC_CDEV is
+# what makes /dev/remoteproc/<name> appear, and the ROM's SSR/ramdump path uses
+# it (devdump, recovery, state); RPMSG_CHAR gives /dev/rpmsg-* for the clients
+# that are not on qrtr.
+CONFIG_REMOTEPROC_CDEV=y
+CONFIG_RPMSG_CHAR=y
+
+# USB host-side class drivers.  Stock has these as =m in the vendor module
+# partition.  They matter here for one practical reason beyond parity: with no
+# Wi-Fi and no SLPI, a USB ethernet adapter is the only way to reach the device
+# for bringup, and the FTDI and CDC-ACM paths are how a serial console cable
+# shows up.  USB_CONFIGFS_F_UVC is =y in stock as a gadget function.
+CONFIG_SND_USB_AUDIO=y
+CONFIG_USB_NET_AX88179_178A=y
+CONFIG_USB_RTL8152=y
+CONFIG_USB_SERIAL_FTDI_SIO=y
+CONFIG_USB_CONFIGFS_F_UVC=y
 
 # put the security= default on selinux, as stock does; this is a choice so it has
 # to be the last word on it in the file

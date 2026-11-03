@@ -85,3 +85,28 @@ fs/pstore/blk.c | ^\tbest_effort_dev = kzalloc_obj\(\*best_effort_dev\);$ | befo
 # buffer's physical contiguity is not something those masters observe.
 drivers/dma-buf/heaps/Kconfig | ^config DMABUF_HEAPS_CMA$ | before | DMABUF_HEAPS_QCOM_COMPAT | \nconfig DMABUF_HEAPS_QCOM_COMPAT\n\tbool "DMA-BUF Qualcomm heap name aliases"\n\tdepends on DMABUF_HEAPS_SYSTEM\n\thelp\n\t  Register the heap names Qualcomm vendor userspace opens -\n\t  /dev/dma_heap/qcom,system and friends - as extra names for the\n\t  system heap. Only the names are aliased: the pages still come from\n\t  the buddy allocator, so nothing secure and nothing shared with a\n\t  DSP is implied. Leave this off on a non-Qualcomm board.\n\n
 drivers/dma-buf/heaps/system_heap.c | ^\tif \(IS_ENABLED\(CONFIG_HIGHMEM\) | before | qcom_heap_names | \tif (IS_ENABLED(CONFIG_DMABUF_HEAPS_QCOM_COMPAT)) {\n\t\tstatic const char *const qcom_heap_names[] = {\n\t\t\t"qcom,system", "qcom,system-uncached",\n\t\t\t"qcom,system-movable", "qcom,display",\n\t\t\t"qcom,user-contig", "qcom,demura",\n\t\t};\n\n\t\tfor (unsigned int i = 0; i < ARRAY_SIZE(qcom_heap_names); i++) {\n\t\t\texp_info.name = qcom_heap_names[i];\n\t\t\tsys_heap = dma_heap_add(&exp_info);\n\t\t\tif (IS_ERR(sys_heap))\n\t\t\t\treturn PTR_ERR(sys_heap);\n\t\t}\n\t}\n\n
+
+# Who owns card0, controlD64 and renderD128. DRM allocates primary and render
+# minors from one xarray in registration order (drm_drv.c: drm_minor_get_xa(),
+# drm_minor_alloc(), DRM_MINOR_LIMIT() caps RENDER at 128..191), so the first
+# driver to call drm_dev_register() takes card0 and renderD128 - and on this
+# ROM those two names are the only DRM nodes anything may open, because
+# /vendor/etc/selinux/vendor_file_contexts labels exactly
+# /dev/dri/card0, /dev/dri/controlD64 and /dev/dri/renderD128 as
+# graphics_device and everything else falls back to `device`, which
+# plat_sepolicy.cil neverallows any domain to read, write or open.
+#
+# vgem's own initcall beat msm to it: msm registers only once every component
+# has bound, so vgem took card0/renderD128 and the real card landed on
+# card1/renderD129, where nothing can open it - display dead. 0008 drops
+# vgem's initcall (and its __init marking, since a component bind can run
+# after init memory is freed) and this line calls it from here instead, after
+# msm's own registration succeeded. msm then holds the three labelled names
+# and vgem sits at renderD129, which is all libgsl.so needs:
+# gsl_ioctl_init (@0xc8054) gates its DRM backend on access("/dev/dri/
+# renderD129", F_OK) - existence only - and ioctl_drm_driver_entry (@0x21d3e0)
+# readdir()s /dev/dri picking the card whose DRM_IOCTL_VERSION name is "msm",
+# logging and continuing when an individual open() fails.
+#
+# Needs CONFIG_DRM_VGEM=y, not m: this is a direct call into vgem.
+drivers/gpu/drm/msm/msm_drv.c | ^\tret = msm_debugfs_late_init\(ddev\);$ | before | flame: vgem takes the placeholder minor | \t/* flame: vgem takes the placeholder minor, see\n\t * patches/local/0008-drm-vgem-register-from-msm.patch.\n\t */\n\tif (IS_ENABLED(CONFIG_DRM_VGEM)) {\n\t\textern int vgem_init(void);\n\n\t\tvgem_init();\n\t}\n\n

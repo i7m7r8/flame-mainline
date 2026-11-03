@@ -128,7 +128,21 @@ That leaves three things, all of which are ours to fix:
 
 1. something must *exist* at `/dev/dri/renderD129`, or the DRM backend is never
    entered. `CONFIG_DRM_VGEM=y` registers a second, hardware-less driver whose
-   only job is to own the extra render minor.
+   only job is to own the extra render minor - and *which* minor it owns is not
+   a detail. Primary and render minors come out of one xarray in registration
+   order (`drm_drv.c: drm_minor_get_xa()`, `DRM_MINOR_LIMIT()`), and
+   `/vendor/etc/selinux/vendor_file_contexts` labels exactly three `/dev/dri`
+   names as `graphics_device`: `card0`, `controlD64`, `renderD128`. Everything
+   else is plain `device`, which `plat_sepolicy.cil` neverallows any domain to
+   open. vgem's own initcall used to win the race, because msm only registers
+   once its components bind: vgem ate `card0`/`renderD128` and the real GPU
+   landed on `renderD129`, unopenable, dark screen. `patches/local/0008` drops
+   the initcall and the manifest rule calls `vgem_init()` from `msm_drm_init()`
+   right after msm's own `drm_dev_register()` succeeds, so the three labelled
+   names are the real driver's and vgem is the placeholder at `renderD129`.
+   Permissions are not a problem either way: `/system/etc/ueventd.rc:60` is
+   `/dev/dri/* 0666 root graphics` and the stock Image has no devtmpfs, so
+   ueventd has always owned those nodes.
 2. the GPU node in the DT has to be enabled - mainline describes SM4450's DPU
    (`qcom,sm4450-dpu`, `dpu_8_6_sm4450.h`) and its GPU (`adreno_is_a613`,
    chip id `0x06010300`, the `a6xx_gmuwrapper_funcs` path, `A613 (gen6_3_26_0)`
@@ -157,6 +171,17 @@ request still fails, and that is survivable by design: a failed request sets
 contexts (Widevine L1) and nothing else. Stock never needed any of this - its
 `msm_kgsl.ko` was the backend.
 
+One ceiling here is the ROM's own policy and not something a kernel can fix.
+`graphics_device` chr_file is granted to `surfaceflinger`,
+`hal_graphics_composer`, `gpuservice`, `charger_type` and `slideshow`, and
+`plat_sepolicy.cil` neverallows it to `untrusted_app`, `isolated_app` and
+`shell`. `/dev/kgsl-3d0` (`gpu_device`) is granted only to `gpu_sphal_domain`,
+`mmd` and `rs`. So no application process may hold a DRM fd on this build at
+all: what the GPU accelerates is the compositor, composer and GL service, while
+app-side rendering stays on whatever path the platform allows. That is how the
+ROM is already configured; it is stated here so a "why is my game slow" report
+is not mistaken for a port bug.
+
 ### Display and gralloc
 
 | interface | who | mainline | outcome |
@@ -173,7 +198,7 @@ contexts (Widevine L1) and nothing else. Stock never needed any of this - its
 | subsystem | what it opens | state |
 |-----------|---------------|-------|
 | audio | `libagm.so::device_init` (@0x28ec8) opens `/sys/kernel/snd_card/card_state`, reads one byte and waits for `1`, retrying 99 times with `sleep(1)`; `/sys/kernel/aud_dev/state` is the same shape | **no mainline driver creates these**, so the audio HAL blocks about 99 seconds at boot and then gives way. Needs either a compat sysfs node or the vendor ASoC machine driver; `audio_prm_dlkm.ko`, `audio_pkt_dlkm.ko` and `audpkt_ion_dlkm.ko` are all on the stock module list. |
-| DSP RPC | `libadsprpc.so` (@0x3a9d0) opens `/dev/fastrpc-adsp`, `-cdsp`, `-sdsp`, `-mdsp` and their `-secure` variants, plus `/dev/subsys_adsp`, `/dev/subsys_cdsp`, `/dev/subsys_slpi`, and reads `/sys/class/remoteproc/remoteproc*` | mainline *has* `fastrpc` and `qcom_q6v5_pas`; this needs DT + `CONFIG_QCOM_FASTRPC`, not a port. It is how camera, audio and sensors reach their DSPs. |
+| DSP RPC | `libadsprpc.so` (@0x3a9d0) opens `/dev/fastrpc-adsp`, `-cdsp`, `-sdsp`, `-mdsp` and their `-secure` variants, plus `/dev/subsys_adsp`, `/dev/subsys_cdsp`, `/dev/subsys_slpi`, and reads `/sys/class/remoteproc/remoteproc*` | mainline *has* `fastrpc` and `qcom_q6v5_pas`; both are `=y` and patch 0003 adds the `qcom,sm4450-adsp-pas` / `-wpss-pas` matches, so nothing is missing on the driver side. What is missing is an image the kernel can be given: `/vendor/firmware` holds only CAMERA_ICP, the GPU zap+sqe, gmu, sipa, venus and vpu20 (63 entries, read off vendor.img) and **no adsp or wpss file anywhere under /vendor**. The one route that could serve them is the sysfs fallback - `CONFIG_FW_LOADER_USER_HELPER=y`, so ueventd answers firmware requests from `/etc/firmware/ /odm/firmware/ /vendor/firmware/ /firmware/image/` (system/etc/ueventd.rc) plus `/vendor/firmware_mnt/image/` (vendor/etc/ueventd.rc), where Qualcomm keeps the subsystem images - and a name like `qcom/sm4450/RG55G1/adsp.mbn` can never be found by a path-joining agent, so the board file now carries no `firmware-name` for ADSP at all (driver default `adsp.mbn`) and the vendor's own `adrastea/wpss.mdt` for WPSS, taken verbatim from flame's dtbo. |
 | camera | `camera.qcom.so` opens `/dev/media%d`, reads `/sys/kernel/camera/` and `/sys/devices/soc0/soc_id` | no mainline ISP for SM4450 (`camera.ko`, `camcc-sm4450.ko` are vendor). Expect CamX to fail at media-node enumeration; the config-only part (CamX clock controller) is already `=y`. |
 | GPU sysmon | `/sys/class/kgsl/kgsl-3d0/max_gpuclk` (libsdmextension.so @0x94954), `/sys/class/kgsl/kgsl-3d0/snapshot`, `/sys/kernel/debug/kgsl/proc/%d/mem` (libgsl) | kgsl-only. Super-resolution and the GPU frequency strategy lose their input; nothing fails to boot. |
 | sensors | `sensors.qti` writes `/sys/kernel/boot_slpi/ssr`; config JSONs name `flame_*` parts | SLPI/session bus is vendor (`gh_*`, `qcom_glink`); sensor hub is a separate problem from the kernel's own IIO drivers. |
@@ -333,6 +358,53 @@ booted that way receives ravelin's vendor DT and probes nothing (incompatible
 Safety is unchanged: only `boot_<slot the ROM lives in>` is ever written, and
 the stock `boot.img` stays next to the output for a byte-exact restore through
 recovery. See `boot-safety.txt`.
+
+## How this kernel learns how much RAM the phone has
+
+Every DTB the ROM ships - all six ravelin/parrot bases in `boot.img`, the same
+six in `vendor_boot.img`, and all four `dtbo` overlays including flame's own -
+carries
+
+```
+memory { device_type = "memory"; reg = <0x00 0x00 0x00 0x00>; };
+```
+
+a 16-byte placeholder with no unit address. XBL/UEFI writes the real bank list
+into it before the kernel is started, which is why the vendor kernel sees all
+4 GB from a tree that declares nothing. Our board file therefore cannot treat
+its own `/memory` as documentation of the hardware; it is a value that either
+gets overwritten or is used as-is.
+
+The fallback literal is pinned to what can be *proved* from the shipped files,
+and the proof comes from the carveouts: a `no-map` region can only exist inside
+DRAM, so the highest end address across every vendor tree is memory we may
+claim without guessing. That is `trusted_apps_region@e9480000`, ending at
+`0xea680000`, i.e. `0x6a680000` - 1.66 GB - above the `0x80000000` base. The
+vendor's own reserved-memory also has a reusable 16 MB region with
+`alloc-ranges = <0x01 0x00 0xfffffffe 0xffffffff>`, which is only satisfiable
+if there is DRAM above 4 GB, so a 4 GB part certainly has a second bank; its
+base and size appear in no file we can read offline. That gap is precisely what
+`handover_memory_fixup()` closes at boot by rewriting our `/memory` from the
+copy of ABL's patched tree the shim parked, and `dmesg` says which of the two
+happened: either `handover: memory from the bootloader: 0x...@0x...` or
+`keeping the built-in literal`. A phone that reports roughly 1.6 GB total RAM
+is the second case, and the first thing to look at is then the shim record, not
+the memory driver.
+
+Three slots are written rather than one, because the graft uses
+`fdt_setprop_inplace()` and that call refuses to change a property's length;
+spare slots repeat the first range, which memblock folds away silently, so the
+graft can hold up to three banks without resizing anything.
+
+Total reservation is 480.8 MB, of which 435.8 MB is the vendor's own carve-out
+table copied address-for-address and size-for-size (verified by diffing our
+`/reserved-memory` against the ravelin base DTB: 33 regions match exactly, and
+nothing in the vendor tree is missing here). The two additions are ours:
+`splash_region` at `0xb8000000` (44 MB, ABL's splash, needed until DPU takes
+over) and `handover@bc000000` (2 MB, the shim's scratch). Cutting a vendor
+carve-out would not give that RAM back to Linux in any usable way - ADSP, WPSS,
+TrustUI VM and the secure regions hold firmware that is already running when
+the kernel starts - so shrinking them is not on the table.
 
 ## Build recipe (CI)
 
