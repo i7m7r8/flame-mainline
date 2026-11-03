@@ -170,10 +170,13 @@ ADB-less SSH over the gadget) exactly as the stock kernel setup does.
 - Other remote regions: `mpss_region@8a000000` (modem), `camera_region@84b00000`,
   `gpu_microcode_region@89c1a000` (zap), `cpucp_fw_region@80b00000`,
   `cpusys_vm_region@e0600000`.
-- GPU: `qcom,kgsl-iommu@3da0000` with `qcom,smmu-kgsl-cb` clients (a *separate*
-  GPU SMMU — mainline wants the GPU on the apps SMMU with `adreno-smmu` +
-  PP/PGTable, this mismatch is why sky's GPU probes then time out);
-  `gpu_speed_bin@119` nvmem; `gpucc@3d90000` exists upstream.
+- GPU: `qcom,kgsl-iommu@3da0000` with `qcom,smmu-kgsl-cb` clients. Same block,
+  different description: mainline wants it as `adreno_smmu: iommu@3da0000`
+  compatible `qcom,sm4450-smmu-500, qcom,adreno-smmu, qcom,smmu-500,
+  arm,mmu-500` with the GPU's `iommus` pointing at it — which is what
+  upstream's own gmu-wrapper a6xx boards do (`sm6115.dtsi`, `agatti.dtsi`), and
+  our board file already follows it. `gpu_speed_bin@119` nvmem; `gpucc@3d90000`
+  exists upstream (`CONFIG_SM_GPUCC_4450`).
 - NVMEM: `qfprom@221c8000` = `qcom,ravelin-qfprom`, `qcom,qfprom` (needs a new
   compatible in `nvmem/qcom-qfprom.c`, trivial); `qfprom@0` = `qcom,qfprom-sys`.
 - Thermal: two `qcom,tsens-v2` controllers + PMIC ADC/`adc_tm` sensors.
@@ -190,4 +193,4 @@ ADB-less SSH over the gadget) exactly as the stock kernel setup does.
 | modem/RIL (`mpss_region`, `qcom,rmem`) | vendor-only; MBIM over USB gadget is the fallback |
 | `xiaomi_touch` / `qcom,panel-*` / `qcom,uart-bt` extras | vendor-only report nodes, drop them |
 | `pm8010n` I2C PMIC, `pmg1110` | no upstream driver — port from the vendor `qcom,spmi-pmic`-style regulator code |
-| GPU on `kgsl-iommu` | must be re-parented to apps SMMU/`adreno-smmu`, not ported |
+| GPU on `kgsl-iommu` | description only — same block, re-described as `qcom,adreno-smmu` in the board file; done |

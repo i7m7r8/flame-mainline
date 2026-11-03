@@ -67,10 +67,13 @@ Two independent blockers:
    modversions CRCs and a GKI `vermagic`. A mainline kernel exports different
    CRCs, so `fopen`+`finit_module` fails with `ENOEXEC`/`EBADFD` for all 288,
    and the first-stage vendor init that expects them errors out.
-2. **UAPI.** Even if a mainline tree carried a driver for the same block, the
-   HALs use the *vendor* driver interface: `msm_drm`'s `sde_drm` extensions,
-   `kgsl`, `msm_vidc`, `qcom,ipa`, `wcd*` Q6 ioctls. Mainline `drm/msm`,
-   `v4l2`/`mem2mem`, and ALSA expose different nodes and ioctls.
+2. **UAPI.** Even if a mainline tree carried a driver for the same block, some
+   HALs use the *vendor* driver interface: `msm_drm`'s `sde_drm` property
+   extension, `msm_vidc`, `qcom,ipa`, the Q6 `wcd*` ioctls. This is not true of
+   the whole stack though, and the difference matters enough that it was
+   measured rather than assumed - see "What the ROM's HALs actually open"
+   below. The GPU stack, which looked like the worst case, turns out to carry a
+   backend that speaks mainline's `drm/msm` UAPI byte for byte.
 
 So "mainline kernel + unchanged stock ROM" cannot reach a working UI. The two
 routes that do reach Android on mainline, both of which need our kernel only
@@ -83,6 +86,99 @@ as a *base*:
 Route A is the mission. Debian was built and is dropped: the ROM is what has to
 boot. The kernel work below (P0..P9) serves exactly one goal, a mainline
 `boot.img` that runs the existing Android 17 install.
+
+## What the ROM's HALs actually open
+
+Everything in this section was read out of the ROM's own binaries, not inferred
+from the module list: `debugfs -R "dump /lib64/X"` out of `out/re/vendor.img`
+(which is ext4, not erofs), then disassembly and decompilation. Pseudo-C,
+string cross-references and function inventories came from Craft Anything in
+Deep mode; the dumps are under `/root/work/vaso`, its evidence project under
+`/root/work/cany`.
+
+Two sweeps made the picture tractable, and both are worth re-running when the
+ROM changes: a device-node and sysfs inventory (every `/dev/` and `/sys/`
+string in each HAL binary, with the function that references it) and an ioctl
+decode (fold the `mov`/`movk` pairs in front of every `ioctl@plt`/`drmIoctl`
+call, then compare the request word against `_IOWR('d', DRM_COMMAND_BASE + n,
+sizeof(struct))` computed from *this tree's* headers, so a vendor struct that
+grew a field shows up as a different size and not as a lucky match).
+
+### GPU: the result that changed the plan
+
+`libgsl.so` is the Adreno system layer that EGL, Vulkan, CamX and the codecs
+all sit on. `gsl_ioctl_init` (@0xc8054) picks its kernel backend with `access()`:
+
+```
+access("/dev/kgsl-3d0", F_OK)        -> kgsl ops table
+access("/dev/dri/renderD129", F_OK)  -> DRM ops table
+otherwise                            -> "Device access failed, stub the gpu"
+```
+
+So the userspace already knows how to run on a DRM-only kernel, and the DRM
+backend is not a vendor interface: the request words it issues are mainline's
+own - `GEM_NEW 0xc0106442`, `GEM_INFO 0xc0186443`, `GEM_SUBMIT 0xc0486446`,
+`SUBMITQUEUE_NEW 0xc00c644a`, `SUBMITQUEUE_CLOSE 0x4004644b`, `GET_PARAM
+0xc0186440`, each matching this tree's command number *and* struct size.
+`ioctl_drm_driver_entry` (@0x21d3e0) then `opendir`s `/dev/dri`, `readdir`s the
+`render*` entries, opens each and compares `DRM_IOCTL_VERSION`'s driver name,
+so it finds the msm node regardless of which minor it ended up with.
+
+That leaves three things, all of which are ours to fix:
+
+1. something must *exist* at `/dev/dri/renderD129`, or the DRM backend is never
+   entered. `CONFIG_DRM_VGEM=y` registers a second, hardware-less driver whose
+   only job is to own the extra render minor.
+2. the GPU node in the DT has to be enabled - mainline describes SM4450's DPU
+   (`qcom,sm4450-dpu`, `dpu_8_6_sm4450.h`) and its GPU (`adreno_is_a613`,
+   chip id `0x06010300`, the `a6xx_gmuwrapper_funcs` path, `A613 (gen6_3_26_0)`
+   GBIF quirk at `a6xx_gpu.c:1321`), but upstream `sm4450.dtsi` carries **no
+   gpu node at all**, so the board file is the only place it can come from.
+3. the zap shader has to be findable under the name the ROM ships. The catalog
+   asks for `a613_zap.mbn`; the ROM has `gen6_3_26_0_zap.{elf,mbn,mdt,b0x}` and
+   no `a613_zap.mbn`. Setting `firmware-name` on the `zap-shader` child makes
+   `adreno_gpu.c:75` use that name and skip the catalog, and it has to be the
+   `.elf` because mainline's `mdt_loader.c` only parses `elf32_hdr`. The one
+   file is self-contained (one `PT_LOAD`, `p_offset 0x1000` + `p_filesz 0x7b0`
+   = the whole 6064 bytes), so the split `.b02` request never happens.
+
+The last piece works only because the ROM itself opens the door:
+`init.qti.kernel.rc:67` writes `force_sysfs_fallback 1` to
+`/proc/sys/kernel/firmware_config/`, which makes even `request_firmware_direct`
+fall back to the sysfs userhelper, and ueventd then serves `/vendor/firmware`.
+Our config keeps `CONFIG_FW_LOADER_USER_HELPER=y`, which is what that knob
+needs. Stock never needed any of this - its `msm_kgsl.ko` was the backend.
+
+### Display and gralloc
+
+| interface | who | mainline | outcome |
+|-----------|-----|----------|---------|
+| `/dev/dma_heap/qcom,system{,-uncached,-movable}`, `qcom,display` | `SnapDMAAllocator::GetHeapInfo` (snapalloc-impl.so @0x2ca58), `gralloc::DmaManager::GetHeapInfo` (libgralloccore.so @0x178f8) | registers `system` and `reserved` only | **fatal, fixed**: `CONFIG_DMABUF_HEAPS_QCOM_COMPAT` aliases the names onto the system heap. `AllocBuffer` (@0x2c444) calls `BufferAllocator::Alloc` once and returns error 3; `MapNameToIonHeap` (libdmabufheap.so @0x9540) is a two-instruction stub, so there is no retry and no fallback anywhere. |
+| `/dev/qti-smmu-proxy` | string built in `DmaManager::GetInstance` (@0x16db8) and the snapalloc ctor (@0x2c39c) | no such driver | **resolved, and it is not a gap.** The vendor module (`out/re/ko/smmu_proxy_dlkm.ko`) is a Gunyah client: it registers `smmu-proxy-sender`, reads `qti,smmu-proxy-cb-id`, and its `smmu_proxy_dev_ioctl` forwards map/unmap/`switch_sid` to *another VM* over `gh_msgq_send`/`gh_msgq_recv`, lending the buffer with `mem_buf_lend`. Its `.modinfo` depends are `smcinvoke_dlkm,mem_buf_dev,gh_msgq,qcom_dma_heaps`. Nothing normal-allocation ever opens it - which matches the decompile, where the path is only constructed and stored - and no display driver registers its callbacks: `msm_drm.ko`, `msm_kgsl.ko`, `camera.ko` and `heap_mem_ext_v01.ko` contain zero "proxy" strings. So the loss is trusted-UI/secure buffer mapping into a protected context bank, which is already an accepted loss with the secure heaps. |
+| `sde_drm_*` DRM properties | `libsdedrm.so` (`DRMPropertyManager::GetPropertyEnum` @0x42254, `DRMCrtc/DRMConnector/DRMPlane::ParseProperties`) | mainline dpu1 creates none of them | **unresolved, and it is the one that can keep the UI dark.** The names are compiled into length-switched immediate compares, which is why `strings` shows only three of them (`sde_drm_csc_v1`, `sde_drm_roi_v1`, `sde_drm_scaler_v2`). Unknown names are skipped, but every class logs `DRMProperty %s missing from global property mapping` for ones it needs. |
+| `/sys/module/msm_drm/parameters/` | `HWInfoDRM::GetPanelBootParamString` (libsdmdal.so @0x1dbd0) | built-in, and the module is `msm` | read fails, panel boot strings unavailable. Cosmetic. |
+| `/sys/class/backlight/panel%d-backlight/` | `HWPeripheralDRM::GetHWPanelMaxBrightness` (@0x31c80) | DSI panel brightness in mainline is a DRM property, not a backlight device | **gap.** Fixable in our panel driver by registering a `panel0-backlight` device. |
+| `/dev/video`, `/sys/class/video4linux/video` (rotator) | `HWInfoDRM::GetHWRotatorInfo` (@0x1b30c) | no SM4450 rotator driver | HWC loses the rotator and falls back to GPU. |
+
+### Everything else
+
+| subsystem | what it opens | state |
+|-----------|---------------|-------|
+| audio | `libagm.so::device_init` (@0x28ec8) opens `/sys/kernel/snd_card/card_state`, reads one byte and waits for `1`, retrying 99 times with `sleep(1)`; `/sys/kernel/aud_dev/state` is the same shape | **no mainline driver creates these**, so the audio HAL blocks about 99 seconds at boot and then gives way. Needs either a compat sysfs node or the vendor ASoC machine driver; `audio_prm_dlkm.ko`, `audio_pkt_dlkm.ko` and `audpkt_ion_dlkm.ko` are all on the stock module list. |
+| DSP RPC | `libadsprpc.so` (@0x3a9d0) opens `/dev/fastrpc-adsp`, `-cdsp`, `-sdsp`, `-mdsp` and their `-secure` variants, plus `/dev/subsys_adsp`, `/dev/subsys_cdsp`, `/dev/subsys_slpi`, and reads `/sys/class/remoteproc/remoteproc*` | mainline *has* `fastrpc` and `qcom_q6v5_pas`; this needs DT + `CONFIG_QCOM_FASTRPC`, not a port. It is how camera, audio and sensors reach their DSPs. |
+| camera | `camera.qcom.so` opens `/dev/media%d`, reads `/sys/kernel/camera/` and `/sys/devices/soc0/soc_id` | no mainline ISP for SM4450 (`camera.ko`, `camcc-sm4450.ko` are vendor). Expect CamX to fail at media-node enumeration; the config-only part (CamX clock controller) is already `=y`. |
+| GPU sysmon | `/sys/class/kgsl/kgsl-3d0/max_gpuclk` (libsdmextension.so @0x94954), `/sys/class/kgsl/kgsl-3d0/snapshot`, `/sys/kernel/debug/kgsl/proc/%d/mem` (libgsl) | kgsl-only. Super-resolution and the GPU frequency strategy lose their input; nothing fails to boot. |
+| sensors | `sensors.qti` writes `/sys/kernel/boot_slpi/ssr`; config JSONs name `flame_*` parts | SLPI/session bus is vendor (`gh_*`, `qcom_glink`); sensor hub is a separate problem from the kernel's own IIO drivers. |
+
+`/dev/dma_heap` names the ROM labels but that we deliberately do **not** alias:
+`qcom,secure-pixel`, `qcom,secure-cdsp`, `qcom,secure-non-pixel`,
+`qcom,qseecom{,-ta}`, `qcom,cp_sec_display`, `qcom,cp_camera`, `qcom,sp-hlos`,
+`qcom,cma-secure-cdsp` (TrustZone memory), and `qcom,adsp`, `qcom,ubwcp`,
+`qcom,ubwcp-movable`, `qcom,audio-ml` (DSP-shared). Handing those out normal
+buddy pages would turn a clean "cannot open heap" into silent corruption of
+whatever the DSP is reading, so Widevine L1 and secure capture are the accepted
+losses.
+
 
 ## /data: metadata encryption is the first thing that has to be right
 
