@@ -775,7 +775,29 @@
 		qcom,smem-states = <&smp2p_adsp_out 0>;
 		qcom,smem-state-names = "stop";
 
-		firmware-name = "qcom/sm4450/RG55G1/adsp.mbn";
+		/* No firmware-name here. The one that used to sit on this line,
+		 * "qcom/sm4450/RG55G1/adsp.mbn", was an inherited Anbernic
+		 * leftover and could never resolve: the ROM ships no such
+		 * directory (the whole of /vendor/firmware is CAMERA_ICP.*,
+		 * a630_sqe.fw, gen6_3_26_0_zap.*, gmu_gen70000.bin, sipa.bin,
+		 * venus*.mbn, vpu20_*.mbn and wlan/, read off vendor.img) and no
+		 * adsp image anywhere under /vendor. Without the property
+		 * qcom-pas falls back to its own default for this SoC,
+		 * .firmware_name = "adsp.mbn" (patch 0003), and a bare name is
+		 * what both lookup routes can actually use: the in-kernel path
+		 * from firmware_class.path=/vendor/firmware on the command line,
+		 * and - since CONFIG_FW_LOADER_USER_HELPER=y - the ROM's ueventd
+		 * firmware agent, whose search list is "/etc/firmware/
+		 * /odm/firmware/ /vendor/firmware/ /firmware/image/" from
+		 * system/etc/ueventd.rc plus "/vendor/firmware_mnt/image/" from
+		 * vendor/etc/ueventd.rc, both read out of the shipped images.
+		 * That last entry is where Qualcomm puts the subsystem images
+		 * (the modem partition mounts there), so this is the only route
+		 * by which the ADSP could ever come up on this ROM. Whether
+		 * adsp.mbn is really sitting there, and whether a mainline PIL
+		 * would accept a TZ-signed .mbn at all, is untested: expect this
+		 * request to fail, take audio, sensors and the camera DSP with
+		 * it, and say so in docs/mainline-port.md rather than here. */
 
 		glink-edge {
 			interrupts-extended = <&ipcc IPCC_CLIENT_LPASS
@@ -852,7 +874,19 @@
 		qcom,smem-states = <&smp2p_wpss_out 0>;
 		qcom,smem-state-names = "stop";
 
-		firmware-name = "qcom/sm4450/RG55G1/wpss.mbn";
+		/* Taken verbatim from flame's own dtbo overlay ("Flame QRD",
+		 * qcom,board-id <0x2000b 0x00>): firmware-name =
+		 * "adrastea/wpss.mdt", where the base ravelin tree says
+		 * "qca6750/wpss.mdt". A sub-path is correct here because ueventd
+		 * joins its firmware_directories with the requested name, so this
+		 * resolves to /vendor/firmware_mnt/image/adrastea/wpss.mdt. It is
+		 * deliberately not the driver's "wpss.mbn" default: the vendor
+		 * tree is the only place either name was actually observed for
+		 * this modem, and it is not observed for the ADSP. Whether WPSS
+		 * can be brought up by a mainline PIL at all is open, and the
+		 * Wi-Fi client is disabled regardless (see the wlan node), so
+		 * nothing downstream waits on this. */
+		firmware-name = "adrastea/wpss.mdt";
 
 		glink-edge {
 			interrupts-extended = <&ipcc IPCC_CLIENT_WPSS
@@ -3282,13 +3316,21 @@
  * read fails - no shim, a tree whose /memory fell outside the 256 KiB window
  * the early fixmap allows, or a kernel built without the option.
  *
- * The fallback is deliberately the smallest region that is certainly RAM: every
- * carveout in the vendor tree ends by 0xfa480000, and nothing here goes past
- * that, because under-declaring costs memory while over-declaring hands the page
- * allocator addresses that are not memory at all. A 4 GB part also has a second
- * bank above 0x100000000 - the vendor's alloc-ranges reaching 0x1_00000000 says
- * so - which is exactly the thing no offline source can pin down, and one of the
- * reasons the graft is worth having.
+ * The fallback is deliberately the smallest region that is certainly RAM. That
+ * floor is set by the carveouts themselves: a no-map region can only sit inside
+ * DRAM, so the highest end address in any vendor tree is memory we may claim
+ * without guessing. Reading all six ravelin/parrot base DTBs in boot.img and
+ * vendor_boot.img plus the four dtbo overlays, the top is
+ * trusted_apps_region@e9480000, 0xe9480000 + 0x1200000 = 0xea680000, i.e.
+ * 0x6a680000 above the 0x80000000 base - 1.66 GiB. Under-declaring costs memory,
+ * over-declaring hands the page allocator addresses that are not memory at all,
+ * so the literal stops exactly there.
+ *
+ * Note this is *below* 4 GiB, and there is more: the vendor's own reserved-memory
+ * has a reusable 16 MiB region with alloc-ranges = <0x01 0x00 0xfffffffe
+ * 0xffffffff>, which is only satisfiable on a part with DRAM above 4 GiB. The
+ * second bank's base and size are not provable offline from any shipped file,
+ * which is exactly what the graft recovers at runtime.
  *
  * Three slots, not one, because fdt_setprop_inplace() can only ever fill the
  * bytes a property already has; the graft writes as many ranges as the
@@ -3300,8 +3342,8 @@
 
 	memory@80000000 {
 		device_type = "memory";
-		reg = <0x0 0x80000000 0x0 0x68e00000>,
-		      <0x0 0x80000000 0x0 0x68e00000>,
-		      <0x0 0x80000000 0x0 0x68e00000>;
+		reg = <0x0 0x80000000 0x0 0x6a680000>,
+		      <0x0 0x80000000 0x0 0x6a680000>,
+		      <0x0 0x80000000 0x0 0x6a680000>;
 	};
 };
