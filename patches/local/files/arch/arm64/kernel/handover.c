@@ -29,7 +29,6 @@
  * overwritten and left a record saying where. This file reads it back and
  * grafts those three pieces onto our own boot.
  *
- * Timing. The hook runs from setup_arch() right after paging_init(), which is
  * Timing. The command line and the ramdisk run from setup_arch() right after
  * paging_init(), which is the earliest point at which a tree of ~650 KiB can
  * be read at all: the fixmap and early_memremap slots available before then
