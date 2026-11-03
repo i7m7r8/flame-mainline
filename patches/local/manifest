@@ -48,3 +48,16 @@ arch/arm64/kernel/setup.c | ^\tif \(!early_init_dt_scan\(dt_virt, dt_phys\)\) \{
 drivers/md/Makefile | ^obj-\$\(CONFIG_DM_CRYPT\)\s*\+= dm-crypt\.o$ | after | dm-default-key.o | obj-$(CONFIG_DM_DEFAULT_KEY)\t+= dm-default-key.o
 
 drivers/md/Kconfig | ^config DM_SNAPSHOT$ | before | config DM_DEFAULT_KEY | config DM_DEFAULT_KEY\n\ttristate "Default key target (filesystem metadata encryption)"\n\tdepends on BLK_DEV_DM\n\tdepends on BLK_INLINE_ENCRYPTION\n\thelp\n\t  This device-mapper target encrypts everything written to the device\n\t  with one key, except for data that fscrypt has already encrypted\n\t  with a per-file key.  It is what Android's fs_mgr puts below /data\n\t  for metadata encryption.\n\n\t  To compile this code as a module, choose M here: the module will\n\t  be called dm-default-key.\n\n\t  If unsure, say N.\n\n
+
+# pstore_blk attaches at late_initcall, which is the last initcall level - and
+# the disk that holds "oops" is not necessarily registered by then. The ufs
+# host is a platform device that can still be deferred-probing, and the sd disk
+# itself appears from async work (sd_probe_async registers the gendisk, and the
+# partition table is read as part of that). resolve-then-give-up means the
+# backend never attaches, so a kernel that panics or hangs writes no record
+# anywhere: which is exactly the "no boot log" this device has shown. The name
+# is resolved here only to decide whether to keep waiting; the real registration
+# below stays upstream's.
+fs/pstore/blk.c | ^#include <linux/mount.h>$ | after | linux/delay.h | #include <linux/delay.h>\t/* flame: pstore_blk waits for the disk */\n#include <linux/async.h>
+
+fs/pstore/blk.c | ^\tbest_effort_dev = kzalloc_obj\(\*best_effort_dev\);$ | before | async_synchronize_full | \t/* Bounded, and free in the normal case where the disk is already\n\t * there: async_synchronize_full drains what has been scheduled, then the\n\t * name is retried for up to five more seconds in case a deferred probe\n\t * has not reached this device yet. init/do_mounts.c does the same\n\t * two things - wait_for_device_probe(), retry the name, then\n\t * async_synchronize_full() - before it trusts a root= device name.\n\t */\n\tasync_synchronize_full();\n\tfor (int waited = 0; waited < 5000; waited += 100) {\n\t\tdev_t dev;\n\n\t\tif (!early_lookup_bdev(blkdev, &dev))\n\t\t\tbreak;\n\t\tmsleep(100);\n\t}\n\n
