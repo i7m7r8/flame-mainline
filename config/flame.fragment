@@ -840,9 +840,9 @@ CONFIG_USERFAULTFD=y
 # shipped HALs were built against, SCHEDSTATS/LRU_GEN/BINFMT_MISC/IFB/
 # NET_REDIRECT are all in stock (binfmt_misc registrations, the old-anon LRU,
 # and the tc redirect offload netd installs).  Not settable here, so absent by
-# need rather than choice: DEBUG_INFO_BTF needs pahole in the runner,
-# KPROBES_ON_FTRACE needs DYNAMIC_FTRACE_WITH_REGS which arm64 does not have,
-# and SCHED_DEBUG / SCHED_THERMAL_PRESSURE became runtime sysctls upstream.
+# need rather than choice: KPROBES_ON_FTRACE needs DYNAMIC_FTRACE_WITH_REGS
+# which arm64 does not have, and SCHED_DEBUG / SCHED_THERMAL_PRESSURE became
+# runtime sysctls upstream.
 CONFIG_ANON_VMA_NAME=y
 CONFIG_BINFMT_MISC=y
 CONFIG_BPF_JIT_ALWAYS_ON=y
@@ -855,6 +855,21 @@ CONFIG_LRU_GEN_ENABLED=y
 CONFIG_LRU_GEN_WALKS_MMU=y
 CONFIG_NET_REDIRECT=y
 CONFIG_SCHEDSTATS=y
+
+# ---- BTF, which is what makes the ROM's bpf programs loadable
+# bpfloader runs before netd and loads /system/etc/bpf/*.o with libbpf, and
+# those objects carry CO-RE relocations: libbpf resolves them against
+# /sys/kernel/btf/vmlinux, so a kernel without BTF fails every one of them and
+# the cgroup/sk_msg programs netd and the stats HALs depend on never attach.
+# Stock ships it (=y, with DEBUG_INFO and DWARF5).  DEBUG_INFO costs build time
+# on the runner and nothing on the device: objcopy -O binary keeps allocated
+# sections only, so the Image grows by the BTF blob and not by the DWARF.
+# DEBUG_INFO_BTF depends on PAHOLE_VERSION >= 122, which is probed from the
+# pahole that is installed when olddefconfig runs - the reason the job installs
+# `dwarves` before configuring, and why a runner without it fails the =y audit
+# out loud instead of shipping a kernel silently missing /sys/kernel/btf.
+CONFIG_DEBUG_INFO=y
+CONFIG_DEBUG_INFO_BTF=y
 
 # put the security= default on selinux, as stock does; this is a choice so it has
 # to be the last word on it in the file

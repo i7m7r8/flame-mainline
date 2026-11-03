@@ -61,7 +61,7 @@ jobs:
             bc bison flex libelf-dev libssl-dev cpio rsync xz-utils \
             device-tree-compiler patch make gcc-aarch64-linux-gnu \
             binutils-aarch64-linux-gnu qemu-system-arm \
-            kmod python3
+            dwarves kmod python3
 
       # A few seconds, and it is the only thing standing between a green build
       # and a boot image that dies before primary_entry, so run it before the
