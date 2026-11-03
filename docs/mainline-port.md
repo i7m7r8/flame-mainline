@@ -188,10 +188,54 @@ is not mistaken for a port bug.
 |-----------|-----|----------|---------|
 | `/dev/dma_heap/qcom,system{,-uncached,-movable}`, `qcom,display` | `SnapDMAAllocator::GetHeapInfo` (snapalloc-impl.so @0x2ca58), `gralloc::DmaManager::GetHeapInfo` (libgralloccore.so @0x178f8) | registers `system` and `reserved` only | **fatal, fixed**: `CONFIG_DMABUF_HEAPS_QCOM_COMPAT` aliases the names onto the system heap. `AllocBuffer` (@0x2c444) calls `BufferAllocator::Alloc` once and returns error 3; `MapNameToIonHeap` (libdmabufheap.so @0x9540) is a two-instruction stub, so there is no retry and no fallback anywhere. |
 | `/dev/qti-smmu-proxy` | string built in `DmaManager::GetInstance` (@0x16db8) and the snapalloc ctor (@0x2c39c) | no such driver | **resolved, and it is not a gap.** The vendor module (`out/re/ko/smmu_proxy_dlkm.ko`) is a Gunyah client: it registers `smmu-proxy-sender`, reads `qti,smmu-proxy-cb-id`, and its `smmu_proxy_dev_ioctl` forwards map/unmap/`switch_sid` to *another VM* over `gh_msgq_send`/`gh_msgq_recv`, lending the buffer with `mem_buf_lend`. Its `.modinfo` depends are `smcinvoke_dlkm,mem_buf_dev,gh_msgq,qcom_dma_heaps`. Nothing normal-allocation ever opens it - which matches the decompile, where the path is only constructed and stored - and no display driver registers its callbacks: `msm_drm.ko`, `msm_kgsl.ko`, `camera.ko` and `heap_mem_ext_v01.ko` contain zero "proxy" strings. So the loss is trusted-UI/secure buffer mapping into a protected context bank, which is already an accepted loss with the secure heaps. |
-| `sde_drm_*` DRM properties | `libsdedrm.so` (`DRMPropertyManager::GetPropertyEnum` @0x42254, `DRMCrtc/DRMConnector/DRMPlane::ParseProperties`) | mainline dpu1 creates none of them | **still the top display risk, and now pinned down to one question.** The names are not in the file: they are built from length-switched character compares, so `strings` shows only three (`sde_drm_csc_v1`, `sde_drm_roi_v1`, `sde_drm_scaler_v2`), and `DRMPlane`/`DRMCrtc`/`DRMConnector`/`DRMDppsManagerImp` each carry the log line `DRMProperty %s missing from global property mapping` for what they wanted and did not find. `ParseProperties` is `drmModeObjectGetProperties()` over a name-to-enum map, so an *extra* property in the kernel is harmless and an unknown name is skipped with that line. What has not been settled is whether every property the composer needs is fetched with `std::map::at` - the file contains the `map::at: key not found` literal and a local copy of libc++'s throw path, so a genuinely required-but-absent property is an exception in a HAL, not a fallback. The two outcomes are distinguishable in one boot: either SurfaceFlinger comes up and logcat is full of "missing from global property mapping" (degraded colour, demura and LTM, working UI), or the composer dies on an uncaught `std::out_of_range` at first commit (no UI, restarting service). Check `logcat -s SDM libsdedrm` and `dumpsys SurfaceFlinger | head` before touching anything else. |
+| `sde_drm_*` DRM properties | `libsdedrm.so` (`DRMPropertyManager::GetPropertyEnum` @0x42254, `DRMCrtc/DRMConnector/DRMPlane::ParseProperties`, `DRMPlane::GetTypeInfo`) | mainline dpu1 creates none of them | **still the top display risk, narrowed to one site.** The names are not in the file - they are built from length-switched character compares, so `strings` shows only `sde_drm_csc_v1`, `sde_drm_roi_v1`, `sde_drm_scaler_v2`. `ParseProperties` walks `drmModeObjectGetProperties()` and maps each name through `GetPropertyEnum`, so a property the kernel does not have is skipped with `DRMProperty %s missing from global property mapping` and an extra one is simply not in the map. What makes this more than cosmetic is that the library also links libc++'s `map::at`, whose `key not found` path is referenced from nine places: `DRMConnectorManager::Free`, `DRMEncoderManager::DumpById`, `DRMCrtcManager::{DumpById,Perform,Free,PostValidate,PostCommit}`, `DRMPlaneManager::DumpById` and `DRMPlane::GetTypeInfo`. Eight of those are keyed by DRM *object id* and only throw on a teardown race. One is not: `DRMPlane::GetTypeInfo(const map<DRMProperty, tuple<uint64_t, drmModePropertyPtr>> &)` is keyed by **property enum**, so a plane-classification property the vendor driver would have created and mainline does not is an uncaught `std::out_of_range` inside the composer, at plane enumeration, before any frame is ever posted. Outcomes are one boot apart: either logcat is noisy with "missing from global property mapping" and the UI works (degraded colour, demura, LTM), or `vendor.qti.hardware.display.composer-service` dies on the first commit. Read it with `logcat -s SDM libsdedrm` and `dumpsys SurfaceFlinger \| head` before changing anything. If it is the second case the fix is to hand the HAL the properties it enumerates, not to change the compositor. |
 | `/sys/module/msm_drm/parameters/` | `HWInfoDRM::GetPanelBootParamString` (libsdmdal.so @0x1dbd0) | built-in, and the module is `msm` | read fails, panel boot strings unavailable. Cosmetic. |
 | `/sys/class/backlight/panel%d-backlight/` | `HWPeripheralDRM::GetHWPanelMaxBrightness` (@0x31c80) | DSI panel brightness in mainline is a DRM property, not a backlight device | **gap.** Fixable in our panel driver by registering a `panel0-backlight` device. |
 | `/dev/video`, `/sys/class/video4linux/video` (rotator) | `HWInfoDRM::GetHWRotatorInfo` (@0x1b30c) | no SM4450 rotator driver | HWC loses the rotator and falls back to GPU. |
+
+### The property set the vendor display driver had and mainline does not
+
+`grep -rn drm_property_create drivers/gpu/drm/msm/` returns **nothing**: mainline
+msm creates no custom DRM properties at all, on any object, in any generation of
+the driver. Every atomic property on a mainline crtc/plane/connector comes from
+DRM core. The vendor tree, by contrast, creates a couple of dozen, and the
+composer HAL was written against that set.
+
+Which set is not something to guess at. `tools/drm_prop_gap.py` intersects the
+strings in the stock `msm_drm.ko` with the strings in `libsdedrm.so` and removes
+everything mainline's msm driver mentions as a quoted identifier; what is left is
+what the two agreed on and this kernel will not have (101 words, a superset: ELF
+section names and libc symbols leak in because the filter is a shape match, not
+a curated list). The property-shaped ones, grouped by what they are for:
+
+```
+plane   alpha blend_op h_decimate v_decimate hfp vfp multirect_mode
+        excl_rect_v1 src_config scaler_v1 scaler_v2 dim_layer_v1
+        csc_v1 csc_dma_v1 lut_cir lut_ed lut_sep ds_lut_cir ds_lut_ed ds_lut_sep
+crtc    topology_control early_fence_line frame_trigger_mode fb_translation_mode
+        output_fence output_fence_offset input_fence mode_properties
+postproc demura dnsc_blur spr spr_pack_type dspp dspp_caps pma inverse_pma
+        dimming_bl_lut dimming_dyn_ctrl dimming_min_bl sv_bl_scale bl_scale
+        dyn_bit_clk dyn_transfer_time brightness panel_mode qsync_mode
+connector supported_colorspaces ext_hdr_properties hdr_properties hdr_metadata
+        security_level dcs
+bw/clock core_ab core_ib dram_ab dram_ib llcc_ab llcc_ib rot_clk
+        rot_prefill_bw true_inline_rot_rev wb_usage_type dsc_mode
+        vm_request_state idle_pc_state cache_state autorefresh
+```
+
+Treat that as the map of what the composer will not find, not as a to-do list:
+mainline has equivalents for some (core `pixel_blend_mode` for `blend_op`, core
+`rotation`, core `zpos`/`alpha`, `IN_FENCE_FD` for `input_fence`) and no
+equivalent for the rest, which are DPU block knobs. The known consequence of
+absent post-processing properties is degraded image quality. The unknown, and
+the reason this section exists next to the `map::at` finding above, is whether
+one of them is a *precondition* - `DRMPlane::GetTypeInfo` looks properties up by
+enum in a `std::map` with `.at()`, and every other `.at()` in that library is
+keyed by DRM object id.
+
+Regenerate with `python3 tools/drm_prop_gap.py`; the three input paths are
+overridable through `MSM_DRM_KO`, `LIBSDEDRM` and `MSM_SRC`.
 
 ### Everything else
 
