@@ -68,14 +68,46 @@ partitions keep the ROM's own content.
    sections are byte-identical to the inputs, so a mismatched ROM revision
    shows up here rather than on the phone.
 
-6. If it boots to a reset in a few seconds instead of to Android, the reason is
-   on the oops partition by the time you are back in the stock ROM (pstore on
-   block, recorded for panic AND for the reboot(2) that a giving-up init calls):
+6. Read the screen first. The panel is the console.
+
+   ABL leaves the display controller scanning a framebuffer in RAM when it jumps
+   to Linux, and this build keeps that region reserved and binds it as a simple
+   frame buffer with the text console mapped onto it (CONFIG_FB_SIMPLE, and
+   console=tty0 plus fbcon=map:0 in the bootargs of
+   dts/sm4450-xiaomi-flame.dts - both are needed: map:0 picks the framebuffer,
+   only console=tty0 makes the log console exist). The kernel's own boot log is
+   therefore written into the picture the panel is already
+   showing, starting about a second after power on and before Android gets a
+   chance to draw anything.
+
+     text, scrolling, then Android   the kernel is fine; the failure is later
+     text, stops, nothing else        the last lines on the panel are the
+                                      failure. Read them off the screen; this is
+                                      the only channel that survives a device
+                                      that cannot boot, and it needs no USB, no
+                                      recovery and no root
+     the splash image, unchanged      the console never took over the panel: the
+                                      kernel got no further than the shim, or
+                                      ABL did not hand control over at all
+     black, no backlight              nothing ran. Check the slot and that the
+                                      flashed file is flame-mainline-final.img
+
+   This is also why the boot image no longer arms anything that can reset the
+   device under us: the shim turns the Apps watchdog off first (see
+   docs/mainline-port.md), because a watchdog bite is a hardware reset that
+   leaves no panic, no record and no console - the one way this boot could fail
+   with no evidence at all.
+
+7. If you want the log as text and the device made it to a panic, an orderly
+   reboot or a hang, it is also on the oops partition (pstore on block, recorded
+   for panic, oops AND the SHUTDOWN dump of a reboot(2)):
 
      su 0 dd if=/dev/block/by-name/oops bs=1M count=1 2>/dev/null | strings | tail -300
 
-   Paste that; it is the boot log. Nothing else on the device survives this
-   boot, so there is no second place to look.
+   Read it before the stock ROM boots again. That partition is stock's own log
+   area, and its kernel writes to it as soon as it comes up: the reason a
+   previous attempt showed only MIUI lines is that they were written after ours.
+   Boot LOS recovery instead of Android and run the same command from its shell.
 
    pstore writes to whatever PARTLABEL the config names, and "oops" is the name
    this build assumes. If that dd reads nothing, send the real partition list
@@ -87,6 +119,8 @@ partitions keep the ROM's own content.
    A wrong label is not a boot problem: pstore_blk is configured best_effort, so
    a missing partition means no log and nothing else changes.
 
-First board bring-up is much easier with a console: the debug UART is the GenI
-QUP at 0xa88000, 115200 8N1, and the bootargs in the DTB ask for it. Pinout and
-level notes are in docs/hardware-flame.md.
+If you ever want the same log as a byte stream instead of a photograph, there is
+a real serial console: the debug UART is the GenI QUP at 0xa88000, 115200 8N1,
+and the bootargs in the DTB already ask for it. Pinout and level notes are in
+docs/hardware-flame.md. It is a nicer way to read the same text, not a different
+one - step 6 gives you the same output with nothing soldered.

@@ -246,11 +246,77 @@ FINAL    = tools/attach_rom_ramdisk.py adds the ROM's own generic ramdisk
 
 ## Getting the log out of a boot that does not finish
 
-Nothing here is readable over USB during first stage (there is no adb before
-`/init` runs, and the vendor console is a UART header). The one channel that
-survives a reset is pstore on the `oops` partition, read back from the stock ROM
-with `su 0 dd if=/dev/block/by-name/oops bs=1M count=1 | strings`. Three things
-had to be true at once, and none of them were the first time:
+The first builds of this port reset in about ten seconds and left nothing
+anywhere: no panic on the oops partition, no console, no USB. Three separate
+reasons, each fixed, and the fixes are worth keeping in order because they are
+three different kinds of silence.
+
+**A watchdog bite is not a panic.** The vendor device tree declares
+`qcom,wdt@17410000` with `qcom,bark-time = <11000>` and `qcom,pet-time =
+<9360>`, and the ROM's own `qcom_soc_wdt.ko` maps that block as `wdt-base`: pet
+at +0x04, enable at +0x08, status at +0x0c, bark and bite at +0x10 and +0x14,
+with ticks of `ms * 32768 / 1000` from the always-on sleep clock. That layout is
+mainline's `reg_offset_data_kpss` exactly, and the ROM's `qcom_wdt_core.ko` pets
+the timer from a kernel thread that only exists once the vendor modules have
+loaded from the vendor ramdisk. ABL arms the timer on the way into Linux, so a
+kernel that neither pets nor stops it is reset at the bark - a hardware reset
+that takes no path through the kernel and so can never reach pstore, a console
+or anything else. `tools/shim.S` therefore writes the ROM's own stop (pet, then
+0 to +0x08) as its first act, before the Image copy. Mainline's `qcom-wdt.c`
+does not bind this node at all - its table knows `qcom,kpss-wdt` and friends,
+not the vendor's `qcom,msm-watchdog` - and the board DTS deliberately has no
+watchdog node, so nothing re-arms it later. The timer is volatile: the next
+stock boot arms it from LK exactly as before.
+
+**The panel is a console.** ABL leaves the display controller scanning a
+framebuffer in RAM, and the board DTS declares that region both as
+reserved-memory and as a `simple-framebuffer` child of `/chosen`;
+`of_platform_populate` turns that child into a device, `CONFIG_FB_SIMPLE` binds
+it, `console=tty0` puts the VT console on the printk list and `fbcon=map:0`
+pins that console to this framebuffer. From about a second into
+boot, every `printk` is drawn into the picture the panel is already showing:
+nothing to solder, no recovery, no root, and it survives a device that then
+resets or hangs. It is also a negative test worth as much as the log - a boot
+where the splash never turns to text did not reach the framebuffer console,
+which puts the fault in the shim or below rather than in a driver.
+
+`console=tty0` is not decoration and `fbcon=map:0` alone does not work.
+`register_console()` enables a console driver only if it matches an entry on the
+preferred-console list (`try_enable_preferred_console`, and an unmatched driver
+is dropped without ever being registered), and on arm64 nothing adds the VT
+console to that list: only `of_console_check()` does the equivalent, for the
+`/chosen/stdout-path` device, and it returns immediately once any `console=` is
+on the command line. So the bootargs say `console=tty0` themselves, ahead of
+`console=ttyMSM0` so the serial keeps `/dev/console`.
+
+`CONFIG_FRAMEBUFFER_CONSOLE_DETECT_PRIMARY` would veto that, because it maps
+only the *primary* device and `/chosen/stdout-path` points at the debug UART.
+It cannot be turned off from a fragment: `DRM_MSM` selects `DRM_CLIENT_SETUP`,
+which selects it. `fbcon=map:` is the documented override and is what the
+bootargs use.
+
+**pstore attaches before the disk exists.** With a bite no longer ending the
+boot, a failure should reach pstore on the `oops` partition - except
+`pstore_blk_init` is a `late_initcall`, the last initcall level, and the gendisk
+whose partition table holds `oops` is not guaranteed to be registered by then:
+the UFS host is a platform device that may still be deferred-probing, and
+`sd_probe_async` registers the disk from async work that `init/main.c` only
+drains after *all* initcalls. `patches/local/manifest` therefore inserts
+`async_synchronize_full()` plus a bounded five-second retry of the name
+resolution into `__best_effort_init()` - the retry loop is what
+`wait_for_root()` does for `root=`, and draining async work is what
+`prepare_namespace()` does through `wait_for_device_probe()`. Free when the disk
+is already there, and without it a panicking kernel writes no record at all.
+
+That still leaves one trap, which is what the first dumps looked like: the
+stock ROM's own kernel writes to the same partition the moment it boots, so the
+record has to be read *before* Android comes back - from LOS recovery's shell,
+not from Termux after a stock boot.
+
+Nothing here is readable over USB during first stage: there is no adb before
+`/init` runs, and the vendor console is a UART header. Three things had to be
+true at once for the block backend to record anything, and none of them were
+the first time:
 
 - `CONFIG_PSTORE_BLK_*_SIZE` is in **KiB**, and the `4096` in
   `verify_size(name, 4096, ...)` is a byte *alignment*, not a minimum: a value

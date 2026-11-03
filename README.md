@@ -37,11 +37,18 @@ pushed here.
    one module (`module_count_` is bumped on a successful `finit_module`, and is
    0 here), so a kernel that loads nothing passes. No userspace patch, no
    `finit_module` lie.
-4. **There is a log channel for boots that do not finish.** `pstore_blk` on the
-   `oops` partition carries kmsg out of a panic or an init-triggered reboot —
+4. **A boot that fails is visible.** Two channels, because neither one alone
+   is enough. The panel becomes a text console: ABL leaves the display scanning
+   a framebuffer in RAM, the board DTS declares it as a `simple-framebuffer`,
+   and `CONFIG_FB_SIMPLE` plus `console=tty0 fbcon=map:0` write every `printk`
+   into the image the screen is already showing. `pstore_blk` on the `oops`
+   partition then carries kmsg out of a panic or an init-triggered reboot —
    256 KiB zone, `max_reason=4` so `KMSG_DUMP_SHUTDOWN` still writes,
-   `pstore.kmsg_bytes=262144` on the kernel line. `flash-boot.txt` gives the
-   one-line read-back.
+   `pstore.kmsg_bytes=262144` on the kernel line. Neither of those could explain
+   the earliest symptom, a silent reset in about ten seconds, because a
+   **watchdog bite is not a panic**: the shim now stops the Apps watchdog the
+   bootloader armed, using the register layout read out of the ROM's own
+   `qcom_soc_wdt.ko`. See `docs/mainline-port.md` and `flash-boot.txt`.
 
 ## Safety
 
