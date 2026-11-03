@@ -1971,6 +1971,20 @@
 
 			touchscreen-size-x = <1080>;
 			touchscreen-size-y = <2408>;
+			/* Not the panel: 720x1640 is the panel. These are the
+			 * vendor DT's focaltech,display-coords, the range the IC
+			 * firmware reports into, and stock neither rescales nor
+			 * derives it from the panel - fts_input_report_b pushes
+			 * the raw values and fts_ts_probe_entry hands those same
+			 * 1080/2408 to input_set_abs_params. The 3:2 squeeze to
+			 * screen pixels is InputReader normalising against the
+			 * range the device declares, so declaring 720/1640 here
+			 * would clamp every touch past two thirds of the display.
+			 * They also have to be here at all: edt-ft5x06 first sets
+			 * the range from its own num_x * 64 panel-dimension
+			 * register read, which an fts-protocol part need not
+			 * populate sensibly, and touchscreen_parse_properties
+			 * only overrides that when the size cells are present. */
 
 			pinctrl-0 = <&touch_default>;
 			pinctrl-names = "default";

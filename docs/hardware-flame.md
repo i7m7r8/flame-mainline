@@ -122,7 +122,7 @@ above is the content.
 | IC | `focaltech,ic-type = <0x8726081c>` (FT8x46 class), `focaltech,max-touch-number = <10>` |
 | irq | `irq-gpio` = tlmm **13**, flags 0x2008 (edge/falling + pull up) |
 | reset | `reset-gpio` = tlmm **12** |
-| coords | `display-coords = <0 0 0x438 0x968>` = 1080 x 2408 vendor-scaled; real panel is 720 x 1640 (0x2d0/0x668) — scale by 2/3 |
+| coords | `display-coords = <0 0 0x438 0x968>` = 1080 x 2408 — the IC's own coordinate space, not the panel's 720 x 1640 |
 | alt | `spi@984000` / `spi@a90000` with `"novatek,NVT-ts-spi","focaltech,fts"` and `touch@0`; plus `xiaomi_touch` (`xiaomi-touch`) report node |
 
 Mainline path: `touchscreen@38` with `compatible = "focaltech,ft8726"`-style
