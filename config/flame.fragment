@@ -187,6 +187,30 @@ CONFIG_DMABUF_HEAPS_SYSTEM=y
 CONFIG_DMABUF_HEAPS_CMA=y
 CONFIG_CMA=y
 
+# The names above are "system" and (if a CMA area exists) "reserved", and the
+# ROM's allocator will not accept either one. Its buffers come from
+# vendor.qti.hardware.display.snapalloc-impl.so / libgralloccore.so, which ask
+# for /dev/dma_heap/qcom,system, qcom,system-uncached, qcom,system-movable,
+# qcom,display ... by literal, allocate through exactly that one name with no
+# retry, and treat the failure as fatal (the whole call chain, with addresses,
+# is written up in the manifest rule that adds the alias; qcom,user-contig and
+# qcom,demura are not on that chain but are nodes the ROM's own
+# vendor_file_contexts labels, so something else opens them). SurfaceFlinger
+# gets no buffer at all without them, so this is not a nice-to-have.
+#
+# The aliases are names only: the pages come from the buddy allocator like the
+# mainline system heap. Deliberately NOT aliased are the secure heaps
+# (qcom,secure-pixel, qcom,cp_camera, qcom,qseecom..., all in the ROM's
+# vendor_file_contexts) because those hand out TrustZone-protected memory, and
+# the DSP-shared ones (qcom,adsp, qcom,ubwcp) because normal pages the DSP
+# cannot see would turn a clean "cannot open heap" into silent audio corruption.
+# What that costs: DRM-protected video (Widevine L1) and secure capture fail,
+# and anything that really needs ADSP-shared buffers fails. A normal UI,
+# camera preview and playback from these heaps are unaffected, and the SMMU in
+# front of the display, camera and codec blocks is what makes non-contiguous
+# system pages usable for them.
+CONFIG_DMABUF_HEAPS_QCOM_COMPAT=y
+
 # ---- input
 CONFIG_INPUT=y
 CONFIG_INPUT_EVDEV=y

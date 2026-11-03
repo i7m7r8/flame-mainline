@@ -61,3 +61,27 @@ drivers/md/Kconfig | ^config DM_SNAPSHOT$ | before | config DM_DEFAULT_KEY | con
 fs/pstore/blk.c | ^#include <linux/mount.h>$ | after | linux/delay.h | #include <linux/delay.h>\t/* flame: pstore_blk waits for the disk */\n#include <linux/async.h>
 
 fs/pstore/blk.c | ^\tbest_effort_dev = kzalloc_obj\(\*best_effort_dev\);$ | before | async_synchronize_full | \t/* Bounded, and free in the normal case where the disk is already\n\t * there: async_synchronize_full drains what has been scheduled, then the\n\t * name is retried for up to five more seconds in case a deferred probe\n\t * has not reached this device yet. init/do_mounts.c does the same\n\t * two things - wait_for_device_probe(), retry the name, then\n\t * async_synchronize_full() - before it trusts a root= device name.\n\t */\n\tasync_synchronize_full();\n\tfor (int waited = 0; waited < 5000; waited += 100) {\n\t\tdev_t dev;\n\n\t\tif (!early_lookup_bdev(blkdev, &dev))\n\t\t\tbreak;\n\t\tmsleep(100);\n\t}\n\n
+# The ROM's graphics stack opens the Qualcomm heap names and nothing else.
+# Read out of the vendor binaries rather than assumed: snapalloc's
+# SnapDMAAllocator::GetHeapInfo (vendor.qti.hardware.display.snapalloc-impl.so
+# @0x2ca58) picks "qcom,system", or "qcom,system-movable"/"qcom,display"/
+# "qcom,secure-pixel" for the protected and camera usages, and
+# gralloc::DmaManager::GetHeapInfo (libgralloccore.so @0x178f8) adds
+# "qcom,system-uncached" and "qcom,adsp". SnapDMAAllocator::AllocBuffer
+# (@0x2c444) calls BufferAllocator::Alloc exactly once with that one name and
+# returns an error if it fails; BufferAllocator::MapNameToIonHeap
+# (libdmabufheap.so @0x9540) is two instructions - "mov w0, wzr; ret" - so the
+# name mapping is a stub in this build, and DmabufAlloc (@0x9548) only ever
+# ioctls the fd it was handed. There is no fallback to the generic names
+# anywhere on the path, so a kernel that registers only "system" gives
+# SurfaceFlinger no buffer at all.
+# Four of the names below come straight out of that chain. The other two -
+# qcom,user-contig and qcom,demura - are not on the proven path, they are in
+# the ROM's own vendor_file_contexts (/dev/dma_heap/qcom,user-contig,
+# /dev/dma_heap/qcom,demura), so something in the image does try to open them
+# and an absent node is a hard failure there too. Aliasing them to the system
+# heap is safe for the same reason the display alias is: on this SoC the
+# display, camera and codec masters all sit behind the apps SMMU, so a
+# buffer's physical contiguity is not something those masters observe.
+drivers/dma-buf/heaps/Kconfig | ^config DMABUF_HEAPS_CMA$ | before | DMABUF_HEAPS_QCOM_COMPAT | \nconfig DMABUF_HEAPS_QCOM_COMPAT\n\tbool "DMA-BUF Qualcomm heap name aliases"\n\tdepends on DMABUF_HEAPS_SYSTEM\n\thelp\n\t  Register the heap names Qualcomm vendor userspace opens -\n\t  /dev/dma_heap/qcom,system and friends - as extra names for the\n\t  system heap. Only the names are aliased: the pages still come from\n\t  the buddy allocator, so nothing secure and nothing shared with a\n\t  DSP is implied. Leave this off on a non-Qualcomm board.\n\n
+drivers/dma-buf/heaps/system_heap.c | ^\tif \(IS_ENABLED\(CONFIG_HIGHMEM\) | before | qcom_heap_names | \tif (IS_ENABLED(CONFIG_DMABUF_HEAPS_QCOM_COMPAT)) {\n\t\tstatic const char *const qcom_heap_names[] = {\n\t\t\t"qcom,system", "qcom,system-uncached",\n\t\t\t"qcom,system-movable", "qcom,display",\n\t\t\t"qcom,user-contig", "qcom,demura",\n\t\t};\n\n\t\tfor (unsigned int i = 0; i < ARRAY_SIZE(qcom_heap_names); i++) {\n\t\t\texp_info.name = qcom_heap_names[i];\n\t\t\tsys_heap = dma_heap_add(&exp_info);\n\t\t\tif (IS_ERR(sys_heap))\n\t\t\t\treturn PTR_ERR(sys_heap);\n\t\t}\n\t}\n\n
