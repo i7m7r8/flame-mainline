@@ -213,6 +213,14 @@
 			width = <720>;
 			height = <1640>;
 			stride = <2880>; /* PROVISIONAL: verify from device */
+			/* PROVISIONAL too, and it is the safer kind of guess: ABL
+			 * may well store the splash as B,G,R,X rather than R,G,B,X,
+			 * in which case red and blue are swapped here. fbcon draws
+			 * white on black, which is the one picture a channel swap
+			 * cannot ruin, and once msm_dpu drives the panel the format
+			 * comes from the DPU and the panel driver, not from this
+			 * node. So the only thing this can break is colour in the
+			 * seconds before that. */
 			format = "x8r8g8b8";
 			status = "okay";
 		};
