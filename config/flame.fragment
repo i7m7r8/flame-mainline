@@ -867,8 +867,12 @@ CONFIG_SCHEDSTATS=y
 # DEBUG_INFO_BTF depends on PAHOLE_VERSION >= 122, which is probed from the
 # pahole that is installed when olddefconfig runs - the reason the job installs
 # `dwarves` before configuring, and why a runner without it fails the =y audit
-# out loud instead of shipping a kernel silently missing /sys/kernel/btf.
+# out loud instead of shipping a kernel silently missing /sys/kernel/btf.  It
+# also depends on !DEBUG_INFO_REDUCED, and arch/arm64/configs/defconfig turns
+# that on, so it has to be switched back off here: that is what the first BTF
+# build died on.
 CONFIG_DEBUG_INFO=y
+CONFIG_DEBUG_INFO_REDUCED=n
 CONFIG_DEBUG_INFO_BTF=y
 
 # put the security= default on selinux, as stock does; this is a choice so it has
