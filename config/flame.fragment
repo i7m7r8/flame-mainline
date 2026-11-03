@@ -156,6 +156,31 @@ CONFIG_DRM_PANEL_SIMPLE=y
 CONFIG_DRM_PANEL_XIAOMI_C3F=y
 CONFIG_DRM_FBDEV_EMULATION=y
 CONFIG_DRM_FBDEV_OVERALLOC=100
+
+# A second, deliberately useless DRM driver, purely to own a render node.
+# The ROM's GPU userspace is Adreno proprietary, and its system layer
+# (libgsl.so) chooses a kernel backend with access() in gsl_ioctl_init: it
+# tries /dev/kgsl-3d0, then /dev/dri/renderD129, and if neither exists it logs
+# "Device access failed, stub the gpu" and hands EGL, Vulkan, the camera and
+# the codecs a null driver. We have no kgsl, so the DRM backend is the only
+# way in - and it is only entered when the path /dev/dri/renderD129 exists,
+# even though the code behind it opendir()s /dev/dri and readdir()s every
+# render* node, opening each and matching DRM_IOCTL_VERSION's driver name, so
+# it lands on the real msm node whichever number it ended up with. vgem
+# (DRIVER_GEM | DRIVER_RENDER, no hardware behind it) is what makes the second
+# node exist: with msm and vgem both registered the two render minors are 128
+# and 129 in an order that depends only on initcall timing, and the name match
+# makes that order irrelevant. Nothing hardcodes a card path either - the
+# composer reaches the display through libdrm's name-based drmOpen("msm"), and
+# libsdedrm.so contains no /dev/dri string at all.
+#
+# What the DRM backend then calls is the upstream msm UAPI, checked against
+# this tree's own headers rather than assumed: GEM_NEW 0xc0106442, GEM_INFO
+# 0xc0186443, GEM_SUBMIT 0xc0486446, SUBMITQUEUE_NEW 0xc00c644a,
+# SUBMITQUEUE_CLOSE 0x4004644b, GET_PARAM 0xc0186440 - matching command numbers
+# *and* struct sizes. That is why this config line, and not a kgsl port, is
+# what gets hardware acceleration on this kernel.
+CONFIG_DRM_VGEM=y
 CONFIG_BACKLIGHT_CLASS_DEVICE=y
 CONFIG_FB=y
 CONFIG_VT=y

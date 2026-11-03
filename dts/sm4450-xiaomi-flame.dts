@@ -13,7 +13,13 @@
  *     m19; DSI/panel nodes are inherited from sky and must be replaced with
  *     timings from the vendor DT (c3f fragment) before enabling mdss.
  *     Backlight is a KTD3136 on i2c (no mainline driver).
- *   - touch: focaltech@38 on i2c, not Novatek on SPI; no mainline driver.
+ *   - touch: focaltech@38 on i2c, not Novatek on SPI. Bound through edt-ft5x06
+ *     with our own "focaltech,ft8726" match entry (patches/local/manifest).
+ *     This is a try, not a proven fit: the part is an FTS-family controller -
+ *     the vendor driver in the ramdisk is focaltech_spi.ko, whose frame format
+ *     (fts_input_report_b) is not what edt-ft5x06 parses - so if nothing but
+ *     resets and no coordinates show up on device, the fallback is porting the
+ *     FTS protocol parser rather than tweaking the ranges.
  *   - regulators: inherited from the sky/RG55G1 files; must be diffed
  *     against flame's vendor DT before enabling UFS/display/GPU.
  *   - anbernic-only peripherals (fan, hall sensor, joypad, RGB LEDs, WCN3950
@@ -1524,7 +1530,19 @@
 	};
 
 	gpu: gpu@3d00000 {
-		status = "disabled";
+		/* Enabled for the ROM's graphics stack. Its libgsl.so picks a
+		 * kernel backend with access() in gsl_ioctl_init: /dev/kgsl-3d0
+		 * for kgsl, else /dev/dri/renderD129 for DRM, else it gives up
+		 * and stubs the GPU. There is no kgsl here, so the DRM backend
+		 * has to be reachable, which needs a render node numbered 129 -
+		 * see CONFIG_DRM_VGEM in config/flame.fragment for how. Once it
+		 * selects the backend it opendir()s /dev/dri and readdir()s the
+		 * render* nodes, opening each and checking DRM_IOCTL_VERSION's
+		 * driver name, so the vgem node is stepped over and the msm one
+		 * is used. The ioctls it then issues are the upstream msm UAPI
+		 * (GEM_NEW 0xc0106442, GEM_INFO 0xc0186443, GEM_SUBMIT
+		 * 0xc0486446, SUBMITQUEUE_NEW 0xc00c644a), byte for byte. */
+		status = "okay";
 		compatible = "qcom,adreno-613.0", "qcom,adreno";
 		reg = <0x0 0x03d00000 0x0 0x40000>,
 		      <0x0 0x03d9e000 0x0 0x1000>,
@@ -1569,7 +1587,29 @@
 
 		zap-shader {
 			memory-region = <&gpu_microcode_mem>;
-			firmware-name = "qcom/sm4450/a613_zap.mbn";
+			/* The name the ROM actually ships, not the one the
+			 * upstream catalog guesses: /vendor/firmware holds
+			 * gen6_3_26_0_zap.{elf,mdt,mbn,b00,b01,b02} - the
+			 * gen6_3_26_0 of the vendor compatible string is this
+			 * GPU, and a6xx_catalog.c asks for "a613_zap.mbn",
+			 * which is not on the filesystem. Setting
+			 * firmware-name here makes adreno_gpu.c use it
+			 * directly instead of the catalog name.
+			 *
+			 * ELF, not .mdt or .mbn: mainline's mdt_loader.c parses
+			 * elf32_hdr only, and this .elf is self-contained (one
+			 * PT_LOAD, p_offset 0x1000 + p_filesz 0x7b0 = the whole
+			 * 6064-byte file), so the split .b02 request never
+			 * happens and one file is all that is loaded.
+			 *
+			 * Found at runtime because the ROM forces the sysfs
+			 * fallback: init.qti.kernel.rc:67 writes
+			 * force_sysfs_fallback 1, so firmware_class falls back
+			 * to ueventd, which searches /vendor/firmware. Without
+			 * that line request_firmware_direct() would only look
+			 * in /lib/firmware and the GPU would come up without a
+			 * zap shader. */
+			firmware-name = "gen6_3_26_0_zap.elf";
 		};
 
 		gpu_opp_table: opp-table {
@@ -1672,10 +1712,16 @@
 
 		power-domains = <&gpucc GPU_CC_CX_GDSC>;
 		/*
-		 * GPU SMMU probe times out (-110) before gpucc GDSCs are usable;
-		 * the GPU itself is disabled, so park the SMMU until M4.
+		 * This used to be parked: in the M1 bring-up build its probe
+		 * timed out with -110, but that was before the GPU clock
+		 * controller was in the kernel at all - the node above it
+		 * supplies GPU_CC_CX_GDSC, and without a provider the domain
+		 * never powers and the SMMU stalls. CONFIG_SM_GPUCC_4450 is set
+		 * now, and the GPU itself needs this SMMU to map any buffer at
+		 * all, so both are enabled together. If -110 comes back on the
+		 * console this is the node to disable again.
 		 */
-		status = "disabled";
+		status = "okay";
 	};
 };
 
