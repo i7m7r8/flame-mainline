@@ -142,12 +142,20 @@ That leaves three things, all of which are ours to fix:
    file is self-contained (one `PT_LOAD`, `p_offset 0x1000` + `p_filesz 0x7b0`
    = the whole 6064 bytes), so the split `.b02` request never happens.
 
-The last piece works only because the ROM itself opens the door:
-`init.qti.kernel.rc:67` writes `force_sysfs_fallback 1` to
-`/proc/sys/kernel/firmware_config/`, which makes even `request_firmware_direct`
-fall back to the sysfs userhelper, and ueventd then serves `/vendor/firmware`.
-Our config keeps `CONFIG_FW_LOADER_USER_HELPER=y`, which is what that knob
-needs. Stock never needed any of this - its `msm_kgsl.ko` was the backend.
+The last piece needs one more thing, and it is not the thing it first looked
+like. `init.qti.kernel.rc:67` does write `force_sysfs_fallback 1`, but that knob
+only controls the *sysfs userhelper*, and `adreno_gpu.c` calls
+`request_firmware_direct()`, which passes `FW_OPT_NOFALLBACK_SYSFS` - a flag
+`firmware.h` documents as taking precedence over `FW_OPT_UEVENT` and
+`FW_OPT_USERHELPER`. So ueventd is never asked and cannot serve
+`/vendor/firmware` for this lookup; the ROM's own knob is irrelevant to it. What
+works is `firmware_class.path=/vendor/firmware` on the command line, which adds
+a directory to the direct filesystem search, and that is what the board file's
+`chosen` node now sets. If the GPU probes before init mounts /vendor the zap
+request still fails, and that is survivable by design: a failed request sets
+`zap_available = false` rather than returning an error, which costs protected
+contexts (Widevine L1) and nothing else. Stock never needed any of this - its
+`msm_kgsl.ko` was the backend.
 
 ### Display and gralloc
 

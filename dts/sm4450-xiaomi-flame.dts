@@ -209,8 +209,19 @@
 		 * bound to the framebuffer, and never printed to: map:0 alone picks
 		 * which framebuffer a console uses, not whether it is a console.
 		 * ttyMSM0 stays last so it keeps /dev/console, which is what
-		 * stdout-path asks for. */
-		bootargs = "console=tty0 console=ttyMSM0,115200n8 loglevel=7 log_buf_len=4M fbcon=map:0 kpti=0 swiotlb=noforce cgroup.memory=nokmem,nosocket transparent_hugepage=never loop.max_part=7 rcupdate.rcu_expedited=1 clk_ignore_unused pd_ignore_unused androidboot.hardware=qcom androidboot.memcg=1 androidboot.serialconsole=0 androidboot.usbcontroller=a600000.dwc3 androidboot.load_modules_parallel=true androidboot.vendor.qspa=true androidboot.bootdevice=1d84000.ufshc qcom_ice.use_wrapped_keys=1 pstore_blk.best_effort=1 pstore.kmsg_bytes=262144 initcall_debug";
+		 * stdout-path asks for.
+		 *
+		 * firmware_class.path=/vendor/firmware is the only way a driver
+		 * that asks for optional firmware can find anything on this ROM.
+		 * Android has no /lib/firmware in its rootfs, so the built-in
+		 * search list misses every file the vendor put in /vendor, and
+		 * the sysfs userhelper that would otherwise cover it is not
+		 * reachable from the two lookups that matter here: the GPU's
+		 * zap-shader request is a request_firmware_direct(), which
+		 * passes FW_OPT_NOFALLBACK_SYSFS and so ignores the ROM's own
+		 * force_sysfs_fallback 1 (see the zap-shader node). The same path
+		 * also serves remoteproc firmware to the ADSP loader. */
+		bootargs = "console=tty0 console=ttyMSM0,115200n8 loglevel=7 log_buf_len=4M fbcon=map:0 kpti=0 swiotlb=noforce cgroup.memory=nokmem,nosocket transparent_hugepage=never loop.max_part=7 rcupdate.rcu_expedited=1 clk_ignore_unused pd_ignore_unused androidboot.hardware=qcom androidboot.memcg=1 androidboot.serialconsole=0 androidboot.usbcontroller=a600000.dwc3 androidboot.load_modules_parallel=true androidboot.vendor.qspa=true androidboot.bootdevice=1d84000.ufshc qcom_ice.use_wrapped_keys=1 firmware_class.path=/vendor/firmware pstore_blk.best_effort=1 pstore.kmsg_bytes=262144 initcall_debug";
 		stdout-path = "serial0:115200n8";
 
 		framebuffer: framebuffer@b8000000 {
@@ -1602,13 +1613,26 @@
 			 * 6064-byte file), so the split .b02 request never
 			 * happens and one file is all that is loaded.
 			 *
-			 * Found at runtime because the ROM forces the sysfs
-			 * fallback: init.qti.kernel.rc:67 writes
-			 * force_sysfs_fallback 1, so firmware_class falls back
-			 * to ueventd, which searches /vendor/firmware. Without
-			 * that line request_firmware_direct() would only look
-			 * in /lib/firmware and the GPU would come up without a
-			 * zap shader. */
+			 * Found only by a direct filesystem lookup, so the
+			 * search path has to be told about /vendor: the ROM's
+			 * init.qti.kernel.rc:67 force_sysfs_fallback 1 does NOT
+			 * help here, because adreno_gpu.c uses
+			 * request_firmware_direct(), which passes
+			 * FW_OPT_NOFALLBACK_SYSFS - and firmware.h says that
+			 * flag "takes precedence over FW_OPT_UEVENT and
+			 * FW_OPT_USERHELPER". Ueventd is therefore never asked,
+			 * and the only route is firmware_class.path, which the
+			 * chosen bootargs set to /vendor/firmware, where this
+			 * file is: out/re/tree_vendor.tsv lists
+			 * /firmware/gen6_3_26_0_zap.elf (6064 bytes) under the
+			 * vendor mount root.
+			 *
+			 * If the GPU probes before init has mounted /vendor the
+			 * lookup still fails, and that is survivable:
+			 * adreno_gpu.c turns a failed zap request into
+			 * zap_available = false rather than an error, which
+			 * costs protected contexts (Widevine L1) and nothing
+			 * else. */
 			firmware-name = "gen6_3_26_0_zap.elf";
 		};
 
