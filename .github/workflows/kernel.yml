@@ -250,6 +250,35 @@ jobs:
           # with a userspace binary that fails silently when =n.
           grep -E '^(CONFIG_(DRM_MSM.*|DRM_PANEL_XIAOMI_C3F|INTERCONNECT_QCOM_SM4450|SM_GCC_4450|SM_DISPCC_4450|SM_GPUCC_4450|SM_CAMCC_4450|PINCTRL_SM4450|MMC_SDHCI_MSM|SCSI_UFS_QCOM|USB_DWC3_QCOM|PHY_QCOM.*|ATH10K.*|BT_QCA|SND_SOC.*|QCOM_GPI_DMA|TOUCHSCREEN.*|REGULATOR_QCOM.*|IOMMU.*|QCOM_PMIC_GLINK|UCSI_PMIC_GLINK|BATTERY_QCOM_BATTMGR|QCOM_SOCINFO|RPMSG_QCOM_GLINK.*|QCOM_APR|QCOM_FASTRPC|QCOM_UBWC_CONFIG|LEDS_QCOM_LPG|BACKLIGHT_CLASS_DEVICE|QRTR.*))=' \
             flame.config > enabled.txt || true
+          # Same argument as the config watchlist one step up, but for the
+          # objects instead of the options: every string here is something a
+          # userspace binary or a firmware loader looks up by exact name, and it
+          # only reaches the Image if the local patch that creates it applied.
+          # A silently-dropped patch is otherwise indistinguishable from a green
+          # build, and the result boots fine on the bench and fails on the phone.
+          # Split in two because the driver and the device tree carry different
+          # halves of the contract: the property names the code reads live in
+          # the Image, the channel and compatible strings the code only compares
+          # against live in the dtb.
+          for s in \
+            'max_blendstages=' 'smart_dma_rev=' 'qseed_type=' \
+            'panel0-backlight' 'xiaomi,c3f-720x1640-video' \
+            'qcom,fastrpc' 'qcom,non-secure-domain' \
+            'qcom,sm4450-adsp-pas' 'qcom,sm4450-wpss-pas' \
+            'adsp.mdt' 'wpss.mdt'; do
+            grep -qaF -- "$s" Image || {
+              echo "Image is missing '$s': a contract with userspace, or a local patch that did not apply" >&2
+              exit 1
+            }
+          done
+          for s in \
+            'fastrpcglink-apps-dsp' 'qcom,sm4450' 'xiaomi,flame'; do
+            grep -qaF -- "$s" sm4450-xiaomi-flame.dtb || {
+              echo "dtb is missing '$s': flame's device tree lost a node" >&2
+              exit 1
+            }
+          done
+          echo "image-strings: ok"
           dtc -I dtb -O dts sm4450-xiaomi-flame.dtb > sm4450-xiaomi-flame.cdt.dts 2>/dev/null
           ls -lh
           cat enabled.txt
