@@ -1,0 +1,330 @@
+drm/msm/dpu: publish the plane capabilities blob the display HAL insists on
+
+libsdedrm.so - the DRM front end of this ROM's composer - reads exactly one
+plane property by name before it will use the plane, and mainline dpu has never
+created it.
+
+DRMPlane::ParseProperties() (0x32bf8) walks drmModeObjectGetProperties() for
+every plane on the card, turns each name into an enum with
+DRMPropertyManager::GetPropertyEnum() (0x42254) and stores the value plus the
+drmModePropertyPtr in a std::map keyed by that enum. When the walk ends it calls
+DRMPlane::GetTypeInfo(map) (0x3178c) from 0x34314 - once per plane,
+unconditionally - and the first thing GetTypeInfo does is a std::map::at() on
+key 0x18, which GetPropertyEnum's chain of string compares assigns to the name
+"capabilities". No property of that name means no entry, the out_of_range is
+caught nowhere in the library, and the composer dies on "map::at: key not
+found" before it has programmed a single plane: nothing on the panel and a
+SurfaceFlinger restart loop. GetTypeInfo is the only one of the nine map::at
+sites in the library keyed by a property; the other eight are keyed by an object
+id or a display token, so this is the single name the kernel owes the HAL.
+
+What the stock driver gives it is an immutable blob of text. sde_plane.c fills
+a sde_kms_info buffer with sde_kms_info_add_keyint() ("%s=%lld\n") and
+sde_kms_info_start()/append_format()/stop() ("%s=", entries as "%c%c%c%c" when
+unmodified and "%c%c%c%c/%llX/%llX" - modifier >> 56 then modifier & 0xffffff -
+when not, space separated, then "\n"), and hands it over with
+msm_property_set_blob() at strlen + 1. msm_property_install_blob() passes flags
+0x4 and ORs in BLOB, so the property the HAL saw was exactly
+DRM_MODE_PROP_IMMUTABLE|DRM_MODE_PROP_BLOB; both are reproduced here.
+
+GetTypeInfo searches that blob for exactly eighteen keys. The strings are built
+at 0x31c80..0x31f80 and each is looked up through sub_21514, then parsed:
+pixel_formats and inline_rot_pixel_formats by sde_drm::ParseFormats(),
+max_per_pipe_bw and max_per_pipe_bw_high by stoull(), the inline-rotation
+numerator and denominator by stof(), and the other twelve by stoi(). Every
+lookup is guarded by its find(), so a key that is absent simply leaves the
+matching field alone - saying nothing about a block this pipe does not have is
+the vendor's own way of saying it - while a key that is present goes straight to
+the parser: an empty tail throws invalid_argument and a value too wide for its
+parser throws out_of_range. That is also why the two bandwidth lines need
+stoull: the vendor multiplies its catalog thresholds by 1000 there (a umull at
+sde_plane_init+0xa20), which is past INT_MAX.
+
+Two of the fields are not free to invent. scaler_step_ver is fed to a switch at
+0x32b58 that compares against 0x1003, 0x1004, 0x2004, 0x3001 and 0x3002 -
+qseed revisions as (major << 12 | minor), which is how the vendor catalog and
+flame's device tree write qcom,sde-qseed-scalar-version, not mainline's
+(major << 16 | minor) - and the class it returns selects the 2560 line-width
+clamp further down GetTypeInfo. pipe_idx is the index of the pipe within its
+class (sde_plane_init+0xa44 subtracts 1 for the vig group and 5 for the dma
+group), not the raw sspp id.
+
+The lines are therefore written in the order sde_plane_init writes them - pixel
+formats, scaler step version, then the catalog's max_linewidth, max_upscale,
+max_downscale, the two decimation exponents, the two bandwidth thresholds and
+pipe_idx, then the inline-rotation group - and every value is something mainline
+dpu can honour: the scale limits dpu_plane_atomic_check() enforces, no
+decimation (DECIMATED_DIMENSION() has lost its only user), inline rotation only
+when the rotator's formats are supported at a modifier
+dpu_plane_format_mod_supported() accepts, and no smart-pipe pairing because dpu
+pairs nothing and never tells userspace about it. The bandwidth and qseed
+figures quoted in the code comments are flame's own, from
+qcom,sde-max-per-pipe-bw-kbps and qcom,sde-qseed-scalar-version in the vendor DT.
+
+Requires CONFIG_DRM_MSM_DPU=y, which is the only way this file is built on this
+device.
+---
+--- a/drivers/gpu/drm/msm/disp/dpu1/dpu_plane.c
++++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_plane.c
+@@ -1818,6 +1818,248 @@
+ 	.atomic_update = dpu_plane_atomic_update,
+ };
+ 
++/*
++ * The display HAL's sde-drm front end calls DRMPlane::GetTypeInfo() for every
++ * plane on the card, and that starts with std::map::at() on the property it
++ * names "capabilities" - uncaught, so an absent property kills the composer
++ * before it programs a plane. The vendor driver answers with an immutable blob
++ * of text; these are the lines of it that mainline dpu can back.
++ */
++#define DPU_PLANE_CAPS_SIZE 4096
++
++static const uint64_t _dpu_plane_caps_compressed_mods[] = {
++	DRM_FORMAT_MOD_QCOM_COMPRESSED,
++	DRM_FORMAT_MOD_INVALID,
++};
++
++static u32 _dpu_plane_caps_pipe_idx(enum dpu_sspp pipe)
++{
++	if (pipe >= SSPP_VIG0 && pipe < SSPP_RGB0)
++		return pipe - SSPP_VIG0;
++	if (pipe >= SSPP_RGB0 && pipe < SSPP_DMA0)
++		return pipe - SSPP_RGB0;
++	if (pipe >= SSPP_DMA0 && pipe < SSPP_CURSOR0)
++		return pipe - SSPP_DMA0;
++	if (pipe >= SSPP_CURSOR0 && pipe < SSPP_MAX)
++		return pipe - SSPP_CURSOR0;
++
++	return 0;
++}
++
++static bool _dpu_plane_caps_has_format(struct drm_plane *plane,
++		const u32 *formats, size_t num_formats,
++		const uint64_t *modifiers)
++{
++	size_t i;
++	const uint64_t *mod;
++
++	for (i = 0; i < num_formats; i++)
++		for (mod = modifiers; *mod != DRM_FORMAT_MOD_INVALID; mod++)
++			if (dpu_plane_format_mod_supported(plane, formats[i], *mod))
++				return true;
++
++	return false;
++}
++
++static int _dpu_plane_caps_formats(char *buf, size_t size, size_t *len,
++		struct drm_plane *plane, const char *key, const u32 *formats,
++		size_t num_formats, const uint64_t *modifiers)
++{
++	bool first = true;
++	size_t i;
++
++	if (size - *len < strlen(key) + 3)
++		return -ENOSPC;
++
++	*len += scnprintf(buf + *len, size - *len, "%s=", key);
++
++	for (i = 0; i < num_formats; i++) {
++		const uint64_t *mod;
++		char entry[32];
++
++		for (mod = modifiers; *mod != DRM_FORMAT_MOD_INVALID; mod++) {
++			u32 fmt = formats[i];
++
++			if (!dpu_plane_format_mod_supported(plane, fmt, *mod))
++				continue;
++
++			if (*mod == DRM_FORMAT_MOD_LINEAR)
++				scnprintf(entry, sizeof(entry), "%c%c%c%c",
++					  fmt & 0xff, (fmt >> 8) & 0xff,
++					  (fmt >> 16) & 0xff, (fmt >> 24) & 0xff);
++			else
++				scnprintf(entry, sizeof(entry),
++					  "%c%c%c%c/%llX/%llX",
++					  fmt & 0xff, (fmt >> 8) & 0xff,
++					  (fmt >> 16) & 0xff, (fmt >> 24) & 0xff,
++					  (unsigned long long)(*mod >> 56),
++					  (unsigned long long)(*mod & 0xffffff));
++
++			/* a truncated fourcc makes the parser reject the whole
++			 * list, so write the entry whole or not at all
++			 */
++			if (size - *len < strlen(entry) + 2)
++				return -ENOSPC;
++
++			*len += scnprintf(buf + *len, size - *len, "%s%s",
++					  first ? "" : " ", entry);
++			first = false;
++		}
++	}
++
++	if (size - *len < 2)
++		return -ENOSPC;
++
++	*len += scnprintf(buf + *len, size - *len, "\n");
++
++	return 0;
++}
++
++#define CAPS_LINE(_buf, _size, _len, ...)					\
++	do {									\
++		int __r = scnprintf((_buf) + (_len), (_size) - (_len), __VA_ARGS__); \
++		(_len) += __r;							\
++		if (!__r)							\
++			return -ENOSPC;						\
++	} while (0)
++
++static int _dpu_plane_create_capabilities(struct dpu_plane *pdpu,
++		struct drm_plane *plane, bool inline_rotation,
++		const u32 *formats, u32 num_formats)
++{
++	const size_t size = DPU_PLANE_CAPS_SIZE;
++	struct dpu_kms *dpu_kms = _dpu_plane_get_kms(plane);
++	struct dpu_hw_sspp *pipe_hw;
++	const struct dpu_sspp_sub_blks *sblk = NULL;
++	const struct dpu_rotation_cfg *rot = NULL;
++	const struct dpu_mdss_cfg *catalog = dpu_kms->catalog;
++	struct drm_property *prop;
++	struct drm_property_blob *blob;
++	char *buf;
++	bool scaling = false;
++	size_t len = 0;
++	u32 scaler_ver = 0;
++	int i, ret;
++
++	pipe_hw = dpu_rm_get_sspp(&dpu_kms->rm, pdpu->pipe);
++	if (pipe_hw && pipe_hw->cap)
++		sblk = pipe_hw->cap->sblk;
++	else
++		for (i = 0; i < catalog->sspp_count; i++) {
++			const struct dpu_sspp_sub_blks *s = catalog->sspp[i].sblk;
++
++			if (s && s->scaler_blk.len &&
++			    (!inline_rotation || s->rotation_cfg)) {
++				sblk = s;
++				break;
++			}
++		}
++
++	if (sblk) {
++		u32 v = sblk->scaler_blk.version;
++
++		scaling = !!sblk->scaler_blk.len;
++		/* the HAL's own qseed switch compares (major << 12 | minor),
++		 * which is what the vendor catalog and device tree use;
++		 * mainline packs (major << 16 | minor)
++		 */
++		scaler_ver = v ? (((v >> 16) << 12) | (v & 0xfff)) : 0;
++		rot = sblk->rotation_cfg;
++	}
++
++	if (rot && (!inline_rotation ||
++		    !_dpu_plane_caps_has_format(plane, rot->rot_format_list,
++						rot->rot_num_formats,
++						_dpu_plane_caps_compressed_mods)))
++		rot = NULL;
++
++	buf = kmalloc(size, GFP_KERNEL);
++	if (!buf)
++		return -ENOMEM;
++
++	/* the HAL looks each key up by name and leaves its field alone when the
++	 * key is not in the blob, but a key that is there has to parse: so only
++	 * lines the vendor driver would have written for this pipe, each with a
++	 * value this driver can honour
++	 */
++	ret = _dpu_plane_caps_formats(buf, size, &len, plane, "pixel_formats",
++			formats, num_formats, supported_format_modifiers);
++	if (ret)
++		goto err;
++
++	if (scaler_ver)
++		CAPS_LINE(buf, size, len, "scaler_step_ver=%u\n", scaler_ver);
++
++	CAPS_LINE(buf, size, len, "max_linewidth=%u\n", catalog->caps->max_linewidth);
++	CAPS_LINE(buf, size, len, "max_upscale=%u\n", scaling ? MAX_UPSCALE_RATIO : 1);
++	CAPS_LINE(buf, size, len, "max_downscale=%u\n", scaling ? MAX_DOWNSCALE_RATIO : 1);
++	/* dpu decimates nothing, and the vendor driver writes its catalog
++	 * exponent here - 0 on this generation, which is what the HAL saw
++	 */
++	CAPS_LINE(buf, size, len, "max_horizontal_deci=0\n");
++	CAPS_LINE(buf, size, len, "max_vertical_deci=0\n");
++	/* the vendor multiplies its catalog thresholds by 1000 here, which is
++	 * why the HAL reads these two back with stoull
++	 */
++	CAPS_LINE(buf, size, len, "max_per_pipe_bw=%llu\n",
++			(unsigned long long)catalog->perf->max_bw_low * 1000);
++	CAPS_LINE(buf, size, len, "max_per_pipe_bw_high=%llu\n",
++			(unsigned long long)catalog->perf->max_bw_high * 1000);
++	CAPS_LINE(buf, size, len, "pipe_idx=%u\n", _dpu_plane_caps_pipe_idx(pdpu->pipe));
++
++	if (rot) {
++		/* the HAL folds 0x200-0x202 onto one rotator generation, and
++		 * both rotation configs in the catalog are of that generation
++		 */
++		CAPS_LINE(buf, size, len, "true_inline_rot_rev=513\n");
++		CAPS_LINE(buf, size, len, "true_inline_dwnscale_rt=1\n");
++		CAPS_LINE(buf, size, len, "true_inline_dwnscale_rt_numerator=1\n");
++		/* the HAL divides by this one */
++		CAPS_LINE(buf, size, len, "true_inline_dwnscale_rt_denominator=1\n");
++		CAPS_LINE(buf, size, len, "true_inline_dwnscale_nrt=%u\n",
++				MAX_DOWNSCALE_RATIO);
++		CAPS_LINE(buf, size, len, "true_inline_max_height=%u\n",
++				rot->rot_maxheight);
++		/* dpu_plane_check_inline_rotation() takes only UBWC and only
++		 * without scaling, so offer the rotator formats at that one
++		 * modifier
++		 */
++		ret = _dpu_plane_caps_formats(buf, size, &len, plane,
++				"inline_rot_pixel_formats",
++				rot->rot_format_list, rot->rot_num_formats,
++				_dpu_plane_caps_compressed_mods);
++		if (ret)
++			goto err;
++	}
++
++	prop = drm_property_create(plane->dev,
++			DRM_MODE_PROP_BLOB | DRM_MODE_PROP_IMMUTABLE,
++			"capabilities", 0);
++	if (!prop) {
++		ret = -ENOMEM;
++		goto err;
++	}
++
++	/* the vendor hands over strlen + 1 bytes and the HAL reads that many */
++	buf[len] = '\0';
++	blob = drm_property_create_blob(plane->dev, len + 1, buf);
++	kfree(buf);
++	if (IS_ERR(blob))
++		return PTR_ERR(blob);
++
++	/* the blob's one reference belongs to the plane property;
++	 * drm_mode_config_cleanup() is what releases it
++	 */
++	drm_object_attach_property(&plane->base, prop, blob->base.id);
++
++	return 0;
++
++err:
++	kfree(buf);
++
++	return ret;
++}
++
+ /* initialize plane */
+ static struct drm_plane *dpu_plane_init_common(struct drm_device *dev,
+ 					       enum drm_plane_type type,
+@@ -1867,6 +2109,12 @@
+ 
+ 	drm_plane_enable_fb_damage_clips(plane);
+ 
++	ret = _dpu_plane_create_capabilities(pdpu, plane, inline_rotation,
++					     format_list, num_formats);
++	if (ret)
++		DPU_ERROR("[%u]capabilities blob failed, rc=%d: the vendor display HAL will reject this plane\n",
++			  pipe, ret);
++
+ 	DPU_DEBUG("%s created for pipe:%u id:%u\n", plane->name,
+ 					pipe, plane->base.id);
+ 	return plane;
