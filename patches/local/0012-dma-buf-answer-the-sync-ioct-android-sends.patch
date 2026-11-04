@@ -1,0 +1,62 @@
+From: i7m7r8 <i7m7r8@users.noreply.github.com>
+Subject: [PATCH 012] dma-buf: answer the sync ioctl Android userspace sends
+
+Every vendor buffer mapping in this ROM goes through one ioctl number that
+mainline spells differently.
+
+Measured:
+- libdmabufheap.so BufferAllocator::DoSync (+0x9c40..0x9c74) and
+  CpuSyncStart (+0x9cec) build the request as "mov w1, #0x6200" then
+  "movk w1, #0x4008, lsl #16" - 0x40086200, which is _IOR('b', 0, struct
+  dma_buf_sync) - and retry on EINTR, which is the documented dma-buf
+  contract. The same 0x40086200 appears in libgralloccore
+  (+0x155d8), libminkdescriptor (+0x9b90) and libQSEEComAPI (+0xaacc,
+  +0xac60).
+- The stock kernel accepts it: an ioctl-shaped compare in the vendor GKI
+  Image tests w1 against 0x40086200 at 0x982c44.
+- Upstream include/uapi/linux/dma-buf.h:172 picks _IOW for the same
+  number, so dma_buf_ioctl()'s switch (drivers/dma-buf/dma-buf.c:551)
+  would fall through to -ENOIOCTLCMD and userspace would see ENOTTY on
+  every begin/end cpu access - which is how a HAL that maps a heap buffer
+  loses its mapping, not a cosmetic warning.
+
+The direction bit is not part of the contract; the kernel only ever reads
+sync.flags. So match the Android spelling as an alias of the same case
+rather than inventing a translation layer, and let both spellings through.
+compat_ioctl is compat_ptr_ioctl(), which passes the command number
+through unchanged, so the 32-bit HALs are covered by the same label.
+
+---
+--- a/drivers/dma-buf/dma-buf.c
++++ b/drivers/dma-buf/dma-buf.c
+@@ -537,6 +537,22 @@
+ }
+ #endif
+ 
++/*
++ * Android's uapi headers spell DMA_BUF_IOCTL_SYNC with the read direction
++ * bit, _IOR('b', 0, struct dma_buf_sync) = 0x40086200, and vendor userspace
++ * is built against them: BufferAllocator::DoSync (libdmabufheap.so +0x9c64)
++ * loads exactly that value with "mov w1, #0x6200; movk w1, #0x4008, lsl #16"
++ * before calling ioctl(), and snapalloc, gralloc, the camera and audio HALs
++ * and the QSEECom clients all funnel through it. The stock kernel agrees -
++ * its dma_buf_ioctl compares w1 against 0x40086200 (stock Image 0x982c44) -
++ * while upstream chose _IOW. The kernel never looks at the direction bit,
++ * only at the flags inside the struct, so answer both spellings instead of
++ * replying ENOTTY to a well-formed sync and breaking every CPU-side access
++ * to a heap buffer.
++ */
++#define DMA_BUF_IOCTL_SYNC_ANDROID \
++	_IOR(DMA_BUF_BASE, 0, struct dma_buf_sync)
++
+ static long dma_buf_ioctl(struct file *file,
+ 			  unsigned int cmd, unsigned long arg)
+ {
+@@ -549,6 +565,7 @@
+ 
+ 	switch (cmd) {
+ 	case DMA_BUF_IOCTL_SYNC:
++	case DMA_BUF_IOCTL_SYNC_ANDROID:
+ 		if (copy_from_user(&sync, (void __user *) arg, sizeof(sync)))
+ 			return -EFAULT;
+ 
