@@ -415,3 +415,10 @@ jobs:
           name: flame-mainline-${{ github.sha }}
           path: out/
           if-no-files-found: warn
+          # The repository is public, so this artifact store is too: an
+          # anonymous GET on the artifact list works and the zip redirects to a
+          # signed blob URL that serves the boot image. The image carries the
+          # ROM's own first-stage ramdisk, which are not our bytes to hand out,
+          # so the exposure window is cut to a day rather than the 90-day
+          # default. Download with `gh run download` inside that day.
+          retention-days: 1
