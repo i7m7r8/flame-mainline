@@ -29,7 +29,9 @@
  *     WPSS firmware, BT firmware cherokee/crbtfw). Sky's wcn6750 nodes stay
  *     disabled; the correct mainline driver is chosen in M4 once the
  *     firmware partition layout is read back.
- *   - UFS inline crypto (ICE) is not described.
+ *   - UFS inline crypto is described (crypto@1d88000 + qcom,ice), but whether
+ *     its hardware key manager answers the wrapped-key SCM calls on this
+ *     firmware is an on-device question; see the note at that node.
  */
 
 // SPDX-License-Identifier: BSD-3-Clause
@@ -1685,42 +1687,54 @@
 
 		zap-shader {
 			memory-region = <&gpu_microcode_mem>;
-			/* The name the ROM actually ships, not the one the
-			 * upstream catalog guesses: /vendor/firmware holds
+			/* Name it here, because the catalog name does not exist
+			 * on this filesystem: /vendor/firmware holds
 			 * gen6_3_26_0_zap.{elf,mdt,mbn,b00,b01,b02} - the
 			 * gen6_3_26_0 of the vendor compatible string is this
-			 * GPU, and a6xx_catalog.c asks for "a613_zap.mbn",
-			 * which is not on the filesystem. Setting
-			 * firmware-name here makes adreno_gpu.c use it
-			 * directly instead of the catalog name.
+			 * GPU - while the a613 catalog entry asks for
+			 * "a613_zap.mbn". adreno_gpu.c prefers this property.
 			 *
-			 * ELF, not .mdt or .mbn: mainline's mdt_loader.c parses
-			 * elf32_hdr only, and this .elf is self-contained (one
-			 * PT_LOAD, p_offset 0x1000 + p_filesz 0x7b0 = the whole
-			 * 6064-byte file), so the split .b02 request never
-			 * happens and one file is all that is loaded.
+			 * .mbn, and not the .elf or the .mdt. The loader wants a
+			 * Qualcomm MDT: __qcom_mdt_load() rejects a file with
+			 * fewer than two program headers and one whose phdr[0]
+			 * is PT_LOAD (mdt_loader.c:179-183), and the .elf has
+			 * exactly one phdr and it is PT_LOAD, so it cannot be
+			 * parsed. The .mbn has the shape: phdr0 PT_NULL with
+			 * p_filesz 0x94 (the metadata), phdr1 PT_LOAD
+			 * 0x1000/0x7b0, phdr2 the 0xf38 hash segment - all of it
+			 * inside 12088 bytes, so nothing else is requested. The
+			 * .mdt carries the same headers but leaves its segment
+			 * bodies in gen6_3_26_0_zap.b00..b02, which costs three
+			 * more request_firmware_into_buf() lookups for the same
+			 * bytes.
 			 *
-			 * Found only by a direct filesystem lookup, so the
-			 * search path has to be told about /vendor: the ROM's
-			 * init.qti.kernel.rc:67 force_sysfs_fallback 1 does NOT
-			 * help here, because adreno_gpu.c uses
-			 * request_firmware_direct(), which passes
-			 * FW_OPT_NOFALLBACK_SYSFS - and firmware.h says that
-			 * flag "takes precedence over FW_OPT_UEVENT and
-			 * FW_OPT_USERHELPER". Ueventd is therefore never asked,
-			 * and the only route is firmware_class.path, which the
-			 * chosen bootargs set to /vendor/firmware, where this
-			 * file is: out/re/tree_vendor.tsv lists
-			 * /firmware/gen6_3_26_0_zap.elf (6064 bytes) under the
-			 * vendor mount root.
+			 * Getting this name right is not a detail. A failed zap
+			 * load is fatal, not survivable: a6xx_gpu.c only forgives
+			 * -ENODEV, and takes that path by writing
+			 * REG_A6XX_RBBM_SECVID_TRUST_CNTL as 0 instead (:1584-1596,
+			 * "Zap shader not enabled"); every other return - including
+			 * the -EINVAL of a misparsed image, and the -ENOENT of a
+			 * missing file, and TZ refusing
+			 * qcom_scm_pas_auth_and_reset(13) - is returned out of
+			 * hw_init, so the GPU never registers and the screen has no
+			 * composer. The two states that are safe by construction
+			 * are having no zap-shader child at all (adreno_gpu.c
+			 * returns -ENODEV) and firmware that answers -EOPNOTSUPP
+			 * (:152-155). If an authorised boot shows "Unable to
+			 * authorize the image" on the console, deleting this child
+			 * is the escape hatch: graphics come up unsigned and
+			 * Widevine L1 goes away.
 			 *
-			 * If the GPU probes before init has mounted /vendor the
-			 * lookup still fails, and that is survivable:
-			 * adreno_gpu.c turns a failed zap request into
-			 * zap_available = false rather than an error, which
-			 * costs protected contexts (Widevine L1) and nothing
-			 * else. */
-			firmware-name = "gen6_3_26_0_zap.elf";
+			 * Only a direct filesystem lookup can find the file: the
+			 * zap request is a request_firmware_direct(), which passes
+			 * FW_OPT_NOFALLBACK_SYSFS - a flag firmware.h says "takes
+			 * precedence over FW_OPT_UEVENT and FW_OPT_USERHELPER" - so
+			 * ueventd is never asked and the ROM's
+			 * init.qti.kernel.rc:67 force_sysfs_fallback 1 does not
+			 * apply. firmware_class.path=/vendor/firmware in the chosen
+			 * bootargs is the route, and the file is at that mount's
+			 * root (out/re/tree_vendor.tsv). */
+			firmware-name = "gen6_3_26_0_zap.mbn";
 		};
 
 		gpu_opp_table: opp-table {
