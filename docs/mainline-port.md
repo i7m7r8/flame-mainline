@@ -356,21 +356,65 @@ if the ROM on the device is not the build `flame-stock` holds: dump the slot's
 partition, run the same command against that. `RAMDISK.txt` in the artifact
 records which hash went into the image you downloaded.
 
-**Module loading does not block us, and no kernel-side lie is needed.** The
-first stage ends with `LOG(FATAL) << "Failed to load kernel modules"`, which
-looks like a dead end for a mainline kernel that cannot accept 288 vendor `.ko`.
-It is not: `LoadKernelModules()` only returns that failure when
-`modules_loaded = m.GetModuleCount()` is greater than zero, and `module_count_`
-is incremented once per *successful* `finit_module()` in
-`libmodprobe/libmodprobe_ext.cpp`. Every vendor module fails (`CONFIG_MODULES=n`,
-so `finit_module` returns `-ENOSYS`; even with it on, the vermagic and CRCs are
-for `6.6.82-android15-8`), the count stays zero, and the function returns true
-after logging nothing. The one knob that would have relaxed the check further,
-`androidboot.first_stage_console`, is compiled out of this ROM anyway:
-`ALLOW_FIRST_STAGE_CONSOLE=0` for non-debuggable builds, and the string
-`androidboot.first_stage_console` is absent from the shipped `/init` while
-`Failed to load kernel modules` is present. `androidboot.load_modules_parallel`
-is read from the *bootconfig*, which we never touch.
+**Module loading does block us, and the first stage aborts on it.** An earlier
+reading of this paragraph claimed `LoadKernelModules()` only reports failure
+when `modules_loaded = m.GetModuleCount()` is greater than zero, which would
+have made a module-less mainline kernel harmless. That is wrong, and the bytes
+say so. In the shipped `/init` (generic ramdisk, `/init` at 2,763,568 bytes,
+`FirstStageMain` @0x319cbc):
+
+- `Modprobe::LoadListedModules()` @0x33ce08 walks the parsed list; any entry
+  whose `Insmod` fails goes to `IsBlocklisted()` @0x33b9c8, and unless that
+  returns true the accumulator `w23` is zeroed (`0x33ceb4 mov w23, wzr`).
+  Only an *empty* list escapes (`0x33ce38 b.eq → 0x33ceac mov w23,#1`).
+- The result, not the count, is what the caller tests: `0x31b328 mov w21, w0`
+  then `0x31b3f0 tbnz w21, #0, 0x31b408`, whose fall-through reaches
+  `LOG(FATAL) << "Failed to load kernel modules"` (0x31c960,
+  first_stage_init.cpp:461, severity 6, string at 0x20a6e0 is 29 bytes = that
+  text). The `ldar w19,[modprobe+0x140]` at 0x31b330 is the count, and
+  `cmp w19,#1` at 0x31b334 only guards an *INFO log*, which is where the
+  earlier misreading came from.
+
+`CONFIG_MODULES=n` makes every `finit_module()` return `-ENOSYS`; enabling it
+would not help, because the 288 `.ko` in the vendor half are built for
+`6.6.82-android15-8` and would fail on vermagic and struct layout. `modules.load`
+lists 103 of them and the intersection with `modules.blocklist` (61 entries) is
+empty, so all 103 fail as non-blocklisted and the FATAL is certain. The
+`-17/EEXIST` forgiveness in `Insmod` @0x33e3d0 is the only tolerated error and
+does not apply.
+
+The path that does escape is first_stage_init.cpp:232: if `opendir()` on
+`/lib/modules` fails, the whole block is skipped at INFO and the list is never
+read. That is a supported configuration, not a lie about having loaded
+something, and it is what our own half of the initramfs is used to arrange
+(see the next paragraph). `androidboot.first_stage_console` is compiled out of
+this ROM (`ALLOW_FIRST_STAGE_CONSOLE=0`, the string is absent from `/init`), and
+`androidboot.load_modules_parallel` is read from the *bootconfig*, which lives
+in the ROM's vendor_boot and is not ours to change.
+
+**Neither escape is reachable, so the abort is removed from `/init` itself.** The
+data-level options all lose to the unpack order: ABL concatenates our generic
+half *ahead of* the vendor half, and `clean_path()` at `init/initramfs.c:333`
+resolves every cpio conflict in favour of the later entry - it `init_rmdir()`s or
+`init_unlink()`s whatever we left there and then creates the vendor's node. So an
+empty `lib/modules/modules.load` of our own is overwritten by the real 103-line
+one, and a `lib/modules` that is a regular file (to make `opendir()` fail) is
+unlinked before the vendor's directory entry is made. Dropping the vendor half
+entirely is not on the table either: the same half carries
+`system/etc/fstab.default`, which first-stage mount needs.
+
+What is left is one instruction, in the `/init` we already carry: `tools/patch_init_module_fatal.py`
+rewrites `0x31b3f0` from `tbnz w21, #0` (`d5 00 00 37`) to the unconditional
+branch its own success path takes (`b 0x31b408`, `06 00 00 14`), so first stage
+proceeds exactly as if the modules had loaded. Nothing else reads the result. The
+tool is deliberately paranoid: it refuses unless `/init` is the 2,763,568-byte
+build these addresses come from, unless the four bytes at the target are the
+expected `tbnz`, and unless the re-framed archive reads back identically; a future
+ROM therefore gets a hard error rather than a silently half-patched image. It runs
+in the local step, never in CI (the bytes are the ROM's), and its output feeds
+`attach_rom_ramdisk.py --rom-ramdisk`. Re-framing is literal-only LZ4, so the
+section grows from 2,600,656 to 4,912,902 bytes; the kernel's decompressor is fine
+with that and ABL only copies the bytes.
 
 ## Boot handover (why a shim is needed)
 
