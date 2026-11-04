@@ -752,6 +752,27 @@
 };
 
 &soc {
+	/* The node the ROM's init contract expects. Stock creates
+	 * /sys/kernel/boot_adsp/{boot,ssr} from adsp_loader_dlkm.ko in the
+	 * vendor ramdisk, and android.hardware.thermal-service.qti.rc:41 makes
+	 * "wait /sys/kernel/boot_adsp/boot" the first command of its on-boot
+	 * action. init's wait has no timeout and blocks the main loop, so with
+	 * the node absent nothing queued behind it ever runs - the class_start
+	 * that launches the graphics and audio HALs among them. A missing node
+	 * is a hung boot, not a degraded one.
+	 *
+	 * The property name and the compatible are the vendor binding's own, so
+	 * that the contract is stated in the vocabulary the ROM was built with.
+	 * The vendor's fuse inputs (qcom,adsp-state, adsp-fw-name,
+	 * adsp-fw-bit-values) are deliberately not here: under mainline the
+	 * image name belongs to the remoteproc, so there is nothing for a fuse
+	 * to decide. See patches/local/files/drivers/soc/qcom/
+	 * adsp_loader_compat.c for what the two writes do. */
+	adsp_loader: adsp-loader {
+		compatible = "qcom,adsp-loader";
+		qcom,rproc-handle = <&remoteproc_adsp>;
+	};
+
 	remoteproc_adsp: remoteproc@3000000 {
 		compatible = "qcom,sm4450-adsp-pas";
 		reg = <0x0 0x03000000 0x0 0x10000>;
@@ -793,8 +814,11 @@
 		 * wpss.mdt), and mainline mdt_loader.c then wants the ELF plus
 		 * its adsp.b00..bNN siblings in the same directory. Stock boots
 		 * the subsystem through /sys/kernel/boot_adsp/boot (written =1 by
-		 * init.qti.kernel.target.rc on early-boot), a vendor sysfs that
-		 * mainline does not have, so nothing here is proven to work.
+		 * init.qti.kernel.target.rc on early-boot); the adsp-loader node
+		 * above is what answers that sysfs here, and the ADSP is in
+		 * practice already powered by then because patch 0003 sets
+		 * auto_boot, so that write only takes a second keep-on
+		 * reference.
 		 *
 		 * Two reasons to expect it to fail anyway: the image can only
 		 * live on the modem/dsp partitions, and those are empty mount

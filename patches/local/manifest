@@ -110,3 +110,13 @@ drivers/dma-buf/heaps/system_heap.c | ^\tif \(IS_ENABLED\(CONFIG_HIGHMEM\) | bef
 #
 # Needs CONFIG_DRM_VGEM=y, not m: this is a direct call into vgem.
 drivers/gpu/drm/msm/msm_drv.c | ^\tret = msm_debugfs_late_init\(ddev\);$ | before | flame: vgem takes the placeholder minor | \t/* flame: vgem takes the placeholder minor, see\n\t * patches/local/0008-drm-vgem-register-from-msm.patch.\n\t */\n\tif (IS_ENABLED(CONFIG_DRM_VGEM)) {\n\t\textern int vgem_init(void);\n\n\t\tvgem_init();\n\t}\n\n
+
+# The ROM's init waits for /sys/kernel/boot_adsp/boot with no timeout, so a
+# kernel that does not create it hangs first-class userspace rather than
+# degrading it. The source is files/drivers/soc/qcom/adsp_loader_compat.c;
+# these two lines build it. Anchored on QCOM_SMEM's neighbour because "after"
+# lands inside a Kconfig block, not at its end.
+
+drivers/soc/qcom/Makefile | ^obj-\$\(CONFIG_QCOM_SMEM\)\s*\+=\s*smem\.o$ | after | adsp_loader_compat | obj-$(CONFIG_QCOM_ADSP_LOADER_COMPAT)\t+= adsp_loader_compat.o
+
+drivers/soc/qcom/Kconfig | ^config QCOM_SMD_RPM$ | before | QCOM_ADSP_LOADER_COMPAT | \nconfig QCOM_ADSP_LOADER_COMPAT\n\tbool "Qualcomm ADSP loader sysfs compatibility"\n\tdepends on REMOTEPROC\n\tdepends on OF\n\thelp\n\t  Android's first and second stage boot the ADSP by writing 1 to\n\t  /sys/kernel/boot_adsp/boot, and init's wait on that path has no\n\t  timeout. The vendor adsp_loader module creates it; mainline replaced\n\t  that driver with remoteproc, which exposes the same job under\n\t  /sys/class/remoteproc instead. Say Y on a Qualcomm board running a\n\t  vendor userspace, which cannot be retargeted.

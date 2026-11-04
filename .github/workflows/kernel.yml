@@ -248,7 +248,7 @@ jobs:
           # is invisible otherwise: DRM_MSM.* covers DRM_MSM_DPU, and FASTRPC /
           # UBWC_CONFIG / LPG / BACKLIGHT / the c3f panel are each a contract
           # with a userspace binary that fails silently when =n.
-          grep -E '^(CONFIG_(DRM_MSM.*|DRM_PANEL_XIAOMI_C3F|INTERCONNECT_QCOM_SM4450|SM_GCC_4450|SM_DISPCC_4450|SM_GPUCC_4450|SM_CAMCC_4450|PINCTRL_SM4450|MMC_SDHCI_MSM|SCSI_UFS_QCOM|USB_DWC3_QCOM|PHY_QCOM.*|ATH10K.*|BT_QCA|SND_SOC.*|QCOM_GPI_DMA|TOUCHSCREEN.*|REGULATOR_QCOM.*|IOMMU.*|QCOM_PMIC_GLINK|UCSI_PMIC_GLINK|BATTERY_QCOM_BATTMGR|QCOM_SOCINFO|RPMSG_QCOM_GLINK.*|QCOM_APR|QCOM_FASTRPC|QCOM_UBWC_CONFIG|LEDS_QCOM_LPG|BACKLIGHT_CLASS_DEVICE|QRTR.*))=' \
+          grep -E '^(CONFIG_(DRM_MSM.*|DRM_PANEL_XIAOMI_C3F|INTERCONNECT_QCOM_SM4450|SM_GCC_4450|SM_DISPCC_4450|SM_GPUCC_4450|SM_CAMCC_4450|PINCTRL_SM4450|MMC_SDHCI_MSM|SCSI_UFS_QCOM|USB_DWC3_QCOM|PHY_QCOM.*|ATH10K.*|BT_QCA|SND_SOC.*|QCOM_GPI_DMA|TOUCHSCREEN.*|REGULATOR_QCOM.*|IOMMU.*|QCOM_PMIC_GLINK|UCSI_PMIC_GLINK|BATTERY_QCOM_BATTMGR|QCOM_SOCINFO|RPMSG_QCOM_GLINK.*|QCOM_APR|QCOM_FASTRPC|QCOM_UBWC_CONFIG|LEDS_QCOM_LPG|BACKLIGHT_CLASS_DEVICE|QRTR.*|QCOM_ADSP_LOADER_COMPAT))=' \
             flame.config > enabled.txt || true
           # Same argument as the config watchlist one step up, but for the
           # objects instead of the options: every string here is something a
@@ -265,7 +265,8 @@ jobs:
             'panel0-backlight' 'xiaomi,c3f-720x1640-video' \
             'qcom,fastrpc' 'qcom,non-secure-domain' \
             'qcom,sm4450-adsp-pas' 'qcom,sm4450-wpss-pas' \
-            'adsp.mdt' 'wpss.mdt'; do
+            'adsp.mdt' 'wpss.mdt' \
+            'qcom,adsp-loader' 'boot_adsp'; do
             grep -qaF -- "$s" Image || {
               echo "Image is missing '$s': a contract with userspace, or a local patch that did not apply" >&2
               exit 1
