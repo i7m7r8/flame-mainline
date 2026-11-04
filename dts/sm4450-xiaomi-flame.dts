@@ -782,22 +782,30 @@
 		 * a630_sqe.fw, gen6_3_26_0_zap.*, gmu_gen70000.bin, sipa.bin,
 		 * venus*.mbn, vpu20_*.mbn and wlan/, read off vendor.img) and no
 		 * adsp image anywhere under /vendor. Without the property
-		 * qcom-pas falls back to its own default for this SoC,
-		 * .firmware_name = "adsp.mbn" (patch 0003), and a bare name is
-		 * what both lookup routes can actually use: the in-kernel path
-		 * from firmware_class.path=/vendor/firmware on the command line,
-		 * and - since CONFIG_FW_LOADER_USER_HELPER=y - the ROM's ueventd
-		 * firmware agent, whose search list is "/etc/firmware/
-		 * /odm/firmware/ /vendor/firmware/ /firmware/image/" from
-		 * system/etc/ueventd.rc plus "/vendor/firmware_mnt/image/" from
-		 * vendor/etc/ueventd.rc, both read out of the shipped images.
-		 * That last entry is where Qualcomm puts the subsystem images
-		 * (the modem partition mounts there), so this is the only route
-		 * by which the ADSP could ever come up on this ROM. Whether
-		 * adsp.mbn is really sitting there, and whether a mainline PIL
-		 * would accept a TZ-signed .mbn at all, is untested: expect this
-		 * request to fail, take audio, sensors and the camera DSP with
-		 * it, and say so in docs/mainline-port.md rather than here. */
+		 * qcom-pas falls back to the name patch 0003 gives this SoC.
+		 *
+		 * That name is "adsp.mdt", not "adsp.mbn", because that is what
+		 * the ROM's own driver asks for: /lib/modules/qcom_q6v5_pas.ko
+		 * carries a ravelin_adsp_resource whose firmware-name pointer
+		 * relocates to the string "adsp.mdt" (alongside adsp_dtb.mdt and
+		 * wpss.mdt), and mainline mdt_loader.c then wants the ELF plus
+		 * its adsp.b00..bNN siblings in the same directory. Stock boots
+		 * the subsystem through /sys/kernel/boot_adsp/boot (written =1 by
+		 * init.qti.kernel.target.rc on early-boot), a vendor sysfs that
+		 * mainline does not have, so nothing here is proven to work.
+		 *
+		 * Two reasons to expect it to fail anyway: the image can only
+		 * live on the modem/dsp partitions, and those are empty mount
+		 * points in the dumps we have (/vendor/firmware_mnt and
+		 * /vendor/dsp are bare directories in vendor.img), so whether
+		 * adsp.mdt exists is a question only the phone can answer; and
+		 * fstab.default mounts firmware_mnt at late-fs
+		 * (init.target.rc:85 mount_all --late) while an =y remoteproc
+		 * probes during initcalls, far earlier - with
+		 * CONFIG_FW_LOADER_USER_HELPER_FALLBACK unset the request has no
+		 * way to wait for the mount. Take audio, sensors and the camera
+		 * DSP as absent until an adsp.mdt is confirmed on device, and
+		 * record that in docs/mainline-port.md rather than here. */
 
 		glink-edge {
 			interrupts-extended = <&ipcc IPCC_CLIENT_LPASS

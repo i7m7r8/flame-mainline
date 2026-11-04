@@ -14,7 +14,7 @@ surrounding context is taken from the real 7.1.2 file.
  
 +static const struct qcom_pas_data sm4450_adsp_resource = {
 +	.crash_reason_smem = 423,
-+	.firmware_name = "adsp.mbn",
++	.firmware_name = "adsp.mdt",
 +	.pas_id = 1,
 +	.minidump_id = 5,
 +	.auto_boot = true,
@@ -31,7 +31,7 @@ surrounding context is taken from the real 7.1.2 file.
 +
 +static const struct qcom_pas_data sm4450_wpss_resource = {
 +	.crash_reason_smem = 626,
-+	.firmware_name = "wpss.mbn",
++	.firmware_name = "wpss.mdt",
 +	.pas_id = 6,
 +	.minidump_id = 4,
 +	.auto_boot = true,
