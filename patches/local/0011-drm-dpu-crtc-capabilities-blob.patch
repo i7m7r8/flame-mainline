@@ -1,0 +1,152 @@
+drm/msm/dpu: publish the CRTC capabilities blob the composer reads
+
+Same property name as the plane fix (0009), this time on the CRTC. The failure
+mode is different: where DRMPlane::GetTypeInfo() does an uncaught
+std::map::at() and dies, DRMCrtc::ParseCapabilities() (libsdedrm.so 0x2950c)
+reads its one blob with drmModeGetPropertyBlob() - NULL or length 0 returns at
+0x2c404 - and probes all forty-three keys through an inlined
+std::string::find whose npos guard branches past the parse. Nothing here is
+fatal. What it costs is a set of fields that stay at their defaults, and the
+defaults are not neutral:
+
+  max_blendstages    how many layers the composer will hand to the mixer before
+                     it composites the rest itself (stoi -> [x19+0x24])
+  has_src_split      -> +0x20
+  min_prefill_lines, max_bandwidth_low/high (+0x58, +0x60, +0x68 by stoull)
+                     the latency and rate math
+  dspp_count, dsc_block_count (+0xac..+0x120) gate DSPP/DPPS enumeration and
+                     the DSC rate path in DRMPPManager
+  qseed_type         compared only against "qseed2" -> bool +0x2c
+  smart_dma_rev      compared against "smart_dma_v2" / "smart_dma_v2p5" -> +0x30
+
+Every value comes out of this tree's SM4450 catalog and nowhere else:
+max_mixer_blendstages 0x5 (catalog/dpu_8_6_sm4450.h:17), has_src_split left
+unset (field at dpu_hw_catalog.h:284, mainline dpu never splits a mixer per
+plane), min_prefill_lines 40 and max_bw_low/max_bw_high 4200000/7000000
+(catalog/dpu_8_6_sm4450.h:113,108,109), dspp_count and dsc_count from the
+ARRAY_SIZEs at :148 and :154, qseed3 and SmartDMA v2 from sspp[0]'s
+.features = VIG_SC7280_MASK_SDMA and .sblk = dpu_vig_sblk_qseed3_3_1_rot_v201
+(catalog/dpu_8_6_sm4450.h:43,44; SSPP_SCALER_VER at dpu_hw_catalog.c:246,
+sm4450_lm_sblk.maxblendstages at :411).
+
+Deliberately absent: hw_version and the "UBWC version="/"DDR version=" strings.
+The vendor writes an integer and two strings whose encoding this tree cannot
+derive, and each numeric key is parsed with an unwrapped stoi/stof/stoull - a
+value that is wrong in format throws and takes the composer down, which is
+strictly worse than the silence its own guards are built for. qseed_type is
+written even though the only comparison is against "qseed2" and so the honest
+value gives the same answer as nothing: it is a fact, and if the HAL grows a
+qseed3 branch it becomes useful.
+
+Flags and handover mirror the vendor: msm_property_install_blob() passes 0x4 and
+ORs in BLOB, which is DRM_MODE_PROP_BLOB|DRM_MODE_PROP_IMMUTABLE, and
+msm_property_set_blob() hands over strlen + 1 bytes.
+
+---
+--- a/drivers/gpu/drm/msm/disp/dpu1/dpu_crtc.c
++++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_crtc.c
+@@ -1866,6 +1866,93 @@
+ 	.get_scanout_position = dpu_crtc_get_scanout_position,
+ };
+ 
++/*
++ * The composer this ROM ships reads one immutable "capabilities" blob off every
++ * CRTC as well as off every plane. Unlike the plane property this one cannot
++ * kill the HAL - DRMCrtc::ParseCapabilities (libsdedrm.so 0x2950c) probes each
++ * key with std::string::find and falls through when it is absent, and a missing
++ * blob returns at 0x2c404 - but the fields it fills decide how the composer
++ * uses the mixer: max_blendstages is how many layers it will hand to MDP
++ * instead of compositing them itself, and qseed_type and smart_dma_rev select
++ * the scaling and smart-pipe paths it is willing to program at all.
++ *
++ * Only lines whose value comes from a catalog field are written. Every numeric
++ * key is parsed with an unwrapped stoi/stof/stoull, so a malformed value throws
++ * and takes the composer with it; silence is the guarded path.
++ */
++#define DPU_CRTC_CAPS_SIZE 1024
++
++static int dpu_crtc_init_capabilities(struct drm_crtc *crtc)
++{
++	struct drm_device *dev = crtc->dev;
++	struct msm_drm_private *priv = dev->dev_private;
++	struct dpu_kms *dpu_kms = to_dpu_kms(priv->kms);
++	const struct dpu_mdss_cfg *catalog = dpu_kms->catalog;
++	struct drm_property *prop;
++	struct drm_property_blob *blob;
++	char *buf;
++	size_t len = 0;
++
++	buf = kzalloc(DPU_CRTC_CAPS_SIZE, GFP_KERNEL);
++	if (!buf)
++		return -ENOMEM;
++
++	len += scnprintf(buf + len, DPU_CRTC_CAPS_SIZE - len,
++			 "max_blendstages=%u\n",
++			 catalog->caps->max_mixer_blendstages);
++	len += scnprintf(buf + len, DPU_CRTC_CAPS_SIZE - len,
++			 "has_src_split=%u\n",
++			 catalog->caps->has_src_split);
++	len += scnprintf(buf + len, DPU_CRTC_CAPS_SIZE - len,
++			 "min_prefill_lines=%u\n",
++			 catalog->perf->min_prefill_lines);
++	len += scnprintf(buf + len, DPU_CRTC_CAPS_SIZE - len,
++			 "max_bandwidth_low=%u\n",
++			 catalog->perf->max_bw_low);
++	len += scnprintf(buf + len, DPU_CRTC_CAPS_SIZE - len,
++			 "max_bandwidth_high=%u\n",
++			 catalog->perf->max_bw_high);
++	len += scnprintf(buf + len, DPU_CRTC_CAPS_SIZE - len,
++			 "dspp_count=%u\n", catalog->dspp_count);
++	len += scnprintf(buf + len, DPU_CRTC_CAPS_SIZE - len,
++			 "dsc_block_count=%u\n", catalog->dsc_count);
++
++	if (catalog->sspp_count) {
++		const struct dpu_sspp_cfg *sspp = &catalog->sspp[0];
++
++		/* SSPP_SCALER_VER(major, minor) */
++		if (sspp->sblk && (sspp->sblk->qseed_ver >> 16) == 3)
++			len += scnprintf(buf + len, DPU_CRTC_CAPS_SIZE - len,
++					 "qseed_type=qseed3\n");
++
++		if (sspp->features & BIT(DPU_SSPP_SMART_DMA_V2))
++			len += scnprintf(buf + len, DPU_CRTC_CAPS_SIZE - len,
++					 "smart_dma_rev=smart_dma_v2\n");
++	}
++
++	/* vendor hands over strlen + 1 bytes and the HAL reads that many */
++	buf[len] = '\0';
++	blob = drm_property_create_blob(dev, len + 1, buf);
++	kfree(buf);
++	if (IS_ERR(blob))
++		return PTR_ERR(blob);
++
++	prop = drm_property_create(dev,
++			DRM_MODE_PROP_BLOB | DRM_MODE_PROP_IMMUTABLE,
++			"capabilities", 0);
++	if (!prop) {
++		drm_property_blob_put(blob);
++		return -ENOMEM;
++	}
++
++	/* the blob's one reference belongs to the property;
++	 * drm_mode_config_cleanup() is what releases it
++	 */
++	drm_object_attach_property(&crtc->base, prop, blob->base.id);
++
++	return 0;
++}
++
+ /**
+  * dpu_crtc_init - create a new crtc object
+  * @dev: dpu device
+@@ -1912,6 +1999,10 @@
+ 
+ 	drm_crtc_helper_add(crtc, &dpu_crtc_helper_funcs);
+ 
++	ret = dpu_crtc_init_capabilities(crtc);
++	if (ret)
++		return ERR_PTR(ret);
++
+ 	if (dpu_kms->catalog->dspp_count) {
+ 		const struct dpu_dspp_cfg *dspp = &dpu_kms->catalog->dspp[0];
+ 
