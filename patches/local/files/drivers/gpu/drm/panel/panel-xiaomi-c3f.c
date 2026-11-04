@@ -4,10 +4,11 @@
  *
  * Init and power-down sequences are the vendor ones, converted from this
  * device's own device tree by tools/gen_panel_init.py. Brightness goes over
- * DCS 0x51 (vendor bl_ctrl_dcs, 12-bit, minimum level 7), so prepare() brings
- * it up at full scale and no external backlight is described.
+ * DCS 0x51 (vendor bl_ctrl_dcs, 12-bit, minimum level 7), so the panel
+ * registers a backlight device for it and no external backlight is described.
  */
 
+#include <linux/backlight.h>
 #include <linux/delay.h>
 #include <linux/gpio/consumer.h>
 #include <linux/module.h>
@@ -21,11 +22,13 @@
 
 #include "panel-xiaomi-c3f-init.h"
 
-#define C3F_BL_MAX	4095	/* vendor qcom,mdss-dsi-bl-max-level */
+#define C3F_BL_MIN_LEVEL	7	/* vendor qcom,mdss-dsi-bl-min-level */
+#define C3F_BL_MAX_LEVEL	4095	/* vendor qcom,mdss-dsi-bl-max-level */
 
 struct c3f {
 	struct drm_panel panel;
 	struct mipi_dsi_device *dsi;
+	struct backlight_device *bl;
 	struct regulator_bulk_data supplies[4];
 	struct gpio_desc *reset;
 	enum drm_panel_orientation orientation;
@@ -61,6 +64,40 @@ static void c3f_send_cmds(struct mipi_dsi_device *dsi,
 	}
 }
 
+static int c3f_update_status(struct backlight_device *bd)
+{
+	struct c3f *ctx = bl_get_data(bd);
+	unsigned int level = bd->props.brightness;
+	int ret;
+
+	/* the panel is off; the DCS link is not necessarily up either */
+	if (backlight_is_blank(bd))
+		return 0;
+
+	/*
+	 * Vendor floors the level at bl-min-level rather than passing 0 down:
+	 * below it this panel stops responding instead of dimming. The scale is
+	 * not inverted even though the vendor DT carries
+	 * qcom,mdss-dsi-bl-inverted-dbv - the panel's own on-command writes
+	 * 0x51 0xc8 (and 0x51 0xff on the other c3f variants) before display-on,
+	 * and a high DBV there can only mean bright.
+	 */
+	level = clamp(level, (unsigned int)C3F_BL_MIN_LEVEL,
+		      (unsigned int)C3F_BL_MAX_LEVEL);
+
+	ret = mipi_dsi_dcs_set_display_brightness(ctx->dsi, level);
+	if (ret < 0)
+		dev_err(&ctx->dsi->dev, "backlight level %u failed: %d\n",
+			level, ret);
+
+	return ret;
+}
+
+static const struct backlight_ops c3f_backlight_ops = {
+	.options = BL_CORE_SUSPENDRESUME,
+	.update_status = c3f_update_status,
+};
+
 static int c3f_prepare(struct drm_panel *panel)
 {
 	struct c3f *ctx = panel_to_c3f(panel);
@@ -88,7 +125,7 @@ static int c3f_prepare(struct drm_panel *panel)
 
 	c3f_send_cmds(dsi, c3f_init_cmds, C3F_INIT_CMDS_COUNT);
 
-	ret = mipi_dsi_dcs_set_display_brightness(dsi, C3F_BL_MAX);
+	ret = mipi_dsi_dcs_set_display_brightness(dsi, C3F_BL_MAX_LEVEL);
 	if (ret < 0)
 		dev_err(&dsi->dev, "failed to set backlight: %d\n", ret);
 
@@ -200,6 +237,35 @@ static int c3f_probe(struct mipi_dsi_device *dsi)
 
 	/* the DSI host must be powered (LP-11) before the init commands */
 	ctx->panel.prepare_prev_first = true;
+
+	/*
+	 * The name is fixed by the userspace we have to live with: the composer
+	 * builds "/sys/class/backlight/panel%d-backlight/max_brightness" from a
+	 * literal format string (libsdmdal.so .rodata 0xbb77, %d = display id - 1)
+	 * and reads it unconditionally, even on the path where the brightness
+	 * itself is a DRM property. That read is where it learns the top of the
+	 * level domain it will commit, so max_brightness is the contract and the
+	 * name has to match.
+	 */
+	{
+		struct backlight_properties props = {
+			.type = BACKLIGHT_RAW,
+			.max_brightness = C3F_BL_MAX_LEVEL,
+			.brightness = C3F_BL_MAX_LEVEL,
+			.power = BACKLIGHT_POWER_ON,
+		};
+
+		ctx->bl = devm_backlight_device_register(&dsi->dev,
+							 "panel0-backlight",
+							 &dsi->dev, ctx,
+							 &c3f_backlight_ops,
+							 &props);
+		if (IS_ERR(ctx->bl))
+			return dev_err_probe(&dsi->dev, PTR_ERR(ctx->bl),
+					     "failed to register backlight\n");
+	}
+
+	ctx->panel.backlight = ctx->bl;
 
 	drm_panel_add(&ctx->panel);
 
