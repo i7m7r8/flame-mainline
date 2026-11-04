@@ -846,6 +846,51 @@
 					};
 				};
 			};
+
+			/* /dev/fastrpc-adsp. The channel and the three sessions are
+			 * the vendor's own: flame's DT has qcom,fastrpc with label
+			 * "adsp" and qcom,glink-channels "fastrpcglink-apps-dsp", and
+			 * compute-cb nodes whose reg is 3, 4 and 5 with apps_smmu
+			 * context banks 0x1003, 0x1004 and 0x1005 (v_dtb-006 around
+			 * the glink edge). libadsprpc.so opens /dev/fastrpc-adsp and
+			 * /dev/fastrpc-adsp-secure by name, and drivers/misc/fastrpc.c
+			 * builds the node name from the "label" plus "-secure" unless
+			 * qcom,non-secure-domain is set, so that property is what puts
+			 * the plain name the HAL asks for here. Ravelin has no CDSP -
+			 * the only cdsp left in the vendor tree is an IPCC self-ping
+			 * label - so this channel is the whole of FastRPC on this
+			 * board. Unsigned protection domains are refused regardless
+			 * (unsigned_support is set only for CDSP and GDSP), which
+			 * costs the camera DSP filters and any unsigned sklib, not the
+			 * device node.
+			 */
+			fastrpc {
+				compatible = "qcom,fastrpc";
+				qcom,glink-channels = "fastrpcglink-apps-dsp";
+				label = "adsp";
+				qcom,non-secure-domain;
+				#address-cells = <1>;
+				#size-cells = <0>;
+
+				compute-cb@3 {
+					compatible = "qcom,fastrpc-compute-cb";
+					reg = <3>;
+					iommus = <&apps_smmu 0x1003 0x0>;
+				};
+
+				compute-cb@4 {
+					compatible = "qcom,fastrpc-compute-cb";
+					reg = <4>;
+					iommus = <&apps_smmu 0x1004 0x0>;
+					qcom,nsessions = <4>;
+				};
+
+				compute-cb@5 {
+					compatible = "qcom,fastrpc-compute-cb";
+					reg = <5>;
+					iommus = <&apps_smmu 0x1005 0x0>;
+				};
+			};
 		};
 	};
 
