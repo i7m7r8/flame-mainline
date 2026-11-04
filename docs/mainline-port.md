@@ -560,6 +560,79 @@ under qemu, builds `Image` and flame's dtb, packs the payload and the boot
 image, and asserts the packing math against the bytes it produced. Nothing in
 CI builds a rootfs any more; the ROM is the rootfs.
 
+## The composer's property contract, measured
+
+Read out of the ROM's own `libsdedrm.so`, `libsdmdal.so`, `libsdmcore.so` and
+the vendor `msm_drm.ko`, because none of it is documented anywhere:
+
+- **Plane `capabilities` is the only fatal-by-name property in the HAL.**
+  `DRMPlane::GetTypeInfo()` does an uncaught `std::map::at()` on it, once per
+  plane, so without it SurfaceFlinger dies on `map::at: key not found` before
+  programming anything. Patch `0009` publishes it. The other eight `map::at`
+  sites in the library are keyed by object id or display token, not by name.
+- **CRTC and connector `capabilities` are not fatal.** `DRMCrtc::ParseCapabilities`
+  (0x2950c) guards every one of its 43 keys with `find()`/npos and returns
+  quietly on a missing blob (0x2c404). Absence costs fields, not the display -
+  but `max_blendstages` is how many layers the composer will give to the mixer
+  rather than compositing itself, and `qseed_type`/`smart_dma_rev` select the
+  scaling and smart-pipe paths. Patch `0011` publishes the CRTC one from catalog
+  values only. Every numeric key goes through an *unwrapped* `stoi`/`stoull`, so
+  a malformed value aborts where silence would not: keys whose vendor encoding
+  this tree cannot derive (`hw_version`, `UBWC version=`, `DDR version=`) stay
+  absent on purpose.
+- **Brightness travels as a raw panel level.** `DisplayBuiltIn::SetPanelBrightnessEf`
+  (libsdmcore 0x48a9c) computes `trunc(min + b*(max-min))` and nothing on the
+  path scales it again: `HWDeviceDRM::SetupAtomic` hands the integer to
+  `CacheDppsFeature(0x59, crtc_id, level)`, which stores it 64-bit and commits
+  it with `drmModeAtomicAddProperty`. The ceiling it uses comes from an
+  unconditional `atof` read of `/sys/class/backlight/panel%d-backlight/max_brightness`
+  (libsdmdal 0x31be8, format string .rodata 0xbb77, default 255.0f) - so the
+  class device is where both sides agree on the range, and the panel registers
+  it at 4095 (`qcom,mdss-dsi-bl-max-level`). Missing property is *silent*
+  (`InitCrtcProps` does `cbz w0` on the lookup result, 0x43ccc), and
+  `AtomicAddProperty` failure only logs (0xd78e) and continues the loop.
+  In the vendor kernel `brightness`, `bl_scale`, `sv_bl_scale`, `qsync_mode` and
+  `dimming_bl_lut` are installed by `sde_connector_init`, i.e. on the
+  **connector**, not the CRTC.
+- **The other UBWC modifiers are refused on purpose.** The vendor decodes
+  `(0x05<<56)|n` for n in 1,2,3,7,8,9,0A,0B,0E,0F,10 into a 48-byte format table
+  and accepts whichever row matches the fourcc - `sde_plane_format_mod_supported`
+  (0xaaf38) is a 12-instruction "is it in the table" wrapper. The 10-bit video
+  rows are keyed on fourcc `NV12` at modifiers 3 (UBWC-P010) and 7 (UBWC-TP10),
+  which mainline has no row for, so those buffers get an `-EINVAL` at ADDFB2 and
+  the composer falls back to linear. That is a bandwidth loss, not a failure:
+  accepting them would mean authoring tile geometry (`num_planes=4`,
+  `MDP_FETCH_UBWC`, tight vs DX unpack) that nothing here can validate, and a
+  wrong tile height shows up as a corrupted screen instead of a clean refusal.
+  Note also that upstream `drm_fourcc.h` already spends modifier values 2 and 3
+  on `QCOM_TILED2`/`TILED3`, which are *not* the vendor's DX/tight meanings -
+  so those numbers must never be aliased from the vendor table.
+
+## The TEE gate
+
+`tee-nodes` RE of the shipped vendor image says this is the one that can stop
+the boot rather than degrade it, and it is still open:
+
+- `qseecomd` (`class core`, started `on init`), `libqtikeymint.so`,
+  `libqtikeymaster4.so` and `libkeymasterdeviceutils.so`'s
+  `qseecom_dev_init` (0x6734) all open `/dev/qseecom`. `libminkdescriptor.so`
+  and `liboemcrypto.so` open `/dev/smcinvoke`. `libQSEEComAPI.so` allocates from
+  `/dev/dma_heap/qcom,qseecom{,-ta}`. The providers are `qseecom_dlkm.ko`,
+  `smcinvoke_dlkm.ko` and `mem_object.ko`; mainline 7.1.2 has none of the three
+  (`drivers/firmware/qcom/qcom_qseecom.c` is a UEFI secenv SCM wrapper with no
+  char device, and `drivers/tee/qcomtee` speaks GP-ABI `TEE_IOCTL`, not
+  QSEECom).
+- The consequence chain is `keymint-service-qti` (`class early_hal`, aborts via
+  `DefaultAborter` when the TA is unreachable) -> `keystore2` (`class early_hal`,
+  **`critical window=0`**) -> init's "Reboot to bootloader if Keystore crashes
+  more than 4 times before sys.boot_completed". Independently, `fstab.default:51`
+  asks for `+wrappedkey_v0` on fileencryption and `metadata_encryption`, so a
+  kernel that cannot reach the KeyMint TA cannot unlock /data either.
+- AVB is *not* the obstacle: the bootloader is unlocked, `/init` prints
+  "device unlocked so not initializing digest", and the repo has already
+  fastbooted a self-built unsigned `Image` and had ABL load it. vbmeta is never
+  written, so /vendor's hashtree and dm-verity are unaffected.
+
 ## Milestones
 
 | # | exit condition | how it is measured |
