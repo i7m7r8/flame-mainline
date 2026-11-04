@@ -1,0 +1,308 @@
+From: i7m7r8 <i7m7r8@users.noreply.github.com>
+Subject: [PATCH 010] drm/panel-bridge: give the connector a brightness property
+
+The composer can ask for a level; nothing in mainline 7.1.2 can receive it.
+
+Measured, in this ROM's own binaries:
+
+- The vendor driver installs the property on the CONNECTOR. In msm_drm.ko,
+  sde_connector_init (symbol at 0xb06f0) reaches its property table at 0xb12a8
+  with x1 = .rodata+0x63ef0 == "brightness", w2 = 0 (flags), x3 = 0 (min),
+  w4 = 0xffff (max) and w6 = 0x1d = 29 (the vendor's CONNECTOR_PROP_BRIGHTNESS
+  index), calling _msm_property_install_integer (0x17393c), which turns around
+  and calls drm_property_create_range(dev, flags, name, min, max) at 0x1739a0.
+  bl_scale (.rodata+0x46f8f, 0xb1174) and sv_bl_scale (.rodata+0x3ee2f,
+  0xb119c) are installed the same way; they are dpps features we do not
+  implement, and the composer survives without them.
+- The number the composer sends is a raw panel level, not a fraction.
+  libsdmcore.so DisplayBuiltIn::SetPanelBrightnessEf @0x48a9c computes
+  level = trunc(min + b*(max-min)) (0x48b54-0x48b60) and passes it through
+  unchanged; libsdmdal.so HWPeripheralDRM::SetPanelBrightness @0x315fc only
+  caches it (str w19,[x20,#1772] at 0x316a8) and the cached value is added to
+  the atomic commit on the connector object. Nothing scales it anywhere.
+- The max in that expression is read from us: HWPeripheralDRM::
+  GetHWPanelMaxBrightness @0x31be8 snprintfs ".rodata+0xbb77" =
+  "/sys/class/backlight/panel%d-backlight/", appends "max_brightness"
+  (.rodata+0xc296) and atof()s the result. panel0-backlight with
+  max_brightness 4095 - the backlight device the c3f panel driver registers,
+  per the panel patch in this series - is therefore what sets the composer's
+  range, and 4095 is the vendor DT's qcom,mdss-dsi-bl-max-level for c3f.
+- Absence is silent, which is why this is the last property we had to add
+  rather than the first: sde_drm::InitCrtcProps bails on a missing property
+  (cbz w0 @0x43ccc) and an AtomicAddProperty failure is only logged
+  ("...AtomicAddProperty failed obj_id 0x%x, prop_id %d ret %d" @0xd78e) and
+  the loop continues. So without this patch the phone boots and draws, but the
+  screen stays at whatever level the panel driver set in prepare() - full
+  brightness, forever, with the composer logging that it disagrees.
+
+Why this cannot be a DPU patch: 7.1.2 no longer has a dpu_connector.c. For a
+panel on a DSI host the connector is made by drm_bridge_connector_init() with
+the shared const drm_bridge_connector_funcs, because dsi_manager attaches its
+bridge chain with DRM_BRIDGE_ATTACH_NO_CONNECTOR. drm_atomic_connector_set_-
+property() falls through to connector->funcs->atomic_set_property
+(drm_atomic_uapi.c:963), so the only object that both owns that connector and
+can reach the panel's backlight device is the panel bridge itself. Hence two
+optional drm_bridge_funcs hooks, forwarded by the bridge connector to the panel
+bridge it now records in @bridge_panel, and the property created there from
+panel->backlight.
+
+Semantics deliberately chosen: the write is applied at set time, clamped to the
+class device's max_brightness, and its errors are dropped. The vendor applies at
+commit, but a level is not frame-accurate on either kernel, and a panel that is
+powered down cannot take the DCS 0x51 write - propagating that error would fail
+the whole atomic commit and lose the display to keep a brightness update.
+
+---
+--- a/include/drm/drm_bridge.h
++++ b/include/drm/drm_bridge.h
+@@ -958,6 +958,47 @@
+ 	 * Allows bridges to create bridge-specific debugfs files.
+ 	 */
+ 	void (*debugfs_init)(struct drm_bridge *bridge, struct dentry *root);
++
++	/**
++	 * @add_connector_properties:
++	 *
++	 * Allows a bridge to attach extra properties to the connector created
++	 * for it by drm_bridge_connector_init(). Called after the connector has
++	 * been allocated and before it is exposed to userspace.
++	 *
++	 * Returns:
++	 * 0 on success, a negative error code otherwise
++	 */
++	int (*add_connector_properties)(struct drm_bridge *bridge,
++					struct drm_connector *connector);
++
++	/**
++	 * @connector_atomic_set_property:
++	 *
++	 * Counterpart of &drm_connector_funcs.atomic_set_property for the
++	 * properties created by @add_connector_properties.
++	 *
++	 * Returns:
++	 * 0 on success, a negative error code otherwise
++	 */
++	int (*connector_atomic_set_property)(struct drm_bridge *bridge,
++					     struct drm_connector_state *state,
++					     struct drm_property *property,
++					     uint64_t val);
++
++	/**
++	 * @connector_atomic_get_property:
++	 *
++	 * Counterpart of &drm_connector_funcs.atomic_get_property for the
++	 * properties created by @add_connector_properties.
++	 *
++	 * Returns:
++	 * 0 on success, a negative error code otherwise
++	 */
++	int (*connector_atomic_get_property)(struct drm_bridge *bridge,
++					     const struct drm_connector_state *state,
++					     struct drm_property *property,
++					     uint64_t *val);
+ };
+ 
+ /**
+--- a/drivers/gpu/drm/display/drm_bridge_connector.c
++++ b/drivers/gpu/drm/display/drm_bridge_connector.c
+@@ -125,6 +125,15 @@
+ 	struct drm_bridge *bridge_hdmi_cec;
+ 
+ 	/**
++	 * @bridge_panel:
++	 *
++	 * The bridge in the chain that is a drm_panel bridge, if any. Used to
++	 * let the panel contribute connector properties (see
++	 * &drm_bridge_funcs.add_connector_properties).
++	 */
++	struct drm_bridge *bridge_panel;
++
++	/**
+ 	 * @hdmi_funcs:
+ 	 *
+ 	 * The particular &drm_connector_hdmi_funcs implementation for this
+@@ -276,6 +285,40 @@
+ 							 connector->state);
+ }
+ 
++static int
++drm_bridge_connector_atomic_set_property(struct drm_connector *connector,
++					 struct drm_connector_state *state,
++					 struct drm_property *property,
++					 uint64_t val)
++{
++	struct drm_bridge_connector *bridge_connector =
++		to_drm_bridge_connector(connector);
++	struct drm_bridge *bridge = bridge_connector->bridge_panel;
++
++	if (bridge && bridge->funcs->connector_atomic_set_property)
++		return bridge->funcs->connector_atomic_set_property(bridge,
++							    state, property, val);
++
++	return -EINVAL;
++}
++
++static int
++drm_bridge_connector_atomic_get_property(struct drm_connector *connector,
++					 const struct drm_connector_state *state,
++					 struct drm_property *property,
++					 uint64_t *val)
++{
++	struct drm_bridge_connector *bridge_connector =
++		to_drm_bridge_connector(connector);
++	struct drm_bridge *bridge = bridge_connector->bridge_panel;
++
++	if (bridge && bridge->funcs->connector_atomic_get_property)
++		return bridge->funcs->connector_atomic_get_property(bridge, state,
++							   property, val);
++
++	return -EINVAL;
++}
++
+ static const struct drm_connector_funcs drm_bridge_connector_funcs = {
+ 	.reset = drm_bridge_connector_reset,
+ 	.detect = drm_bridge_connector_detect,
+@@ -283,6 +326,8 @@
+ 	.fill_modes = drm_helper_probe_single_connector_modes,
+ 	.atomic_duplicate_state = drm_atomic_helper_connector_duplicate_state,
+ 	.atomic_destroy_state = drm_atomic_helper_connector_destroy_state,
++	.atomic_set_property = drm_bridge_connector_atomic_set_property,
++	.atomic_get_property = drm_bridge_connector_atomic_get_property,
+ 	.debugfs_init = drm_bridge_connector_debugfs_init,
+ 	.oob_hotplug_event = drm_bridge_connector_oob_hotplug_event,
+ };
+@@ -766,6 +811,7 @@
+ 	drm_bridge_put(bridge_connector->bridge_hdmi_audio);
+ 	drm_bridge_put(bridge_connector->bridge_dp_audio);
+ 	drm_bridge_put(bridge_connector->bridge_hdmi_cec);
++	drm_bridge_put(bridge_connector->bridge_panel);
+ }
+ 
+ /**
+@@ -994,6 +1040,9 @@
+ 			return ERR_PTR(ret);
+ 	}
+ 
++	if (panel_bridge)
++		bridge_connector->bridge_panel = drm_bridge_get(panel_bridge);
++
+ 	if (bridge_connector->bridge_hdmi_audio ||
+ 	    bridge_connector->bridge_dp_audio) {
+ 		struct device *dev;
+@@ -1051,6 +1100,15 @@
+ 	if (panel_bridge)
+ 		drm_panel_bridge_set_orientation(connector, panel_bridge);
+ 
++	if (bridge_connector->bridge_panel &&
++	    bridge_connector->bridge_panel->funcs->add_connector_properties) {
++		struct drm_bridge *bridge = bridge_connector->bridge_panel;
++
++		ret = bridge->funcs->add_connector_properties(bridge, connector);
++		if (ret)
++			return ERR_PTR(ret);
++	}
++
+ 	if (support_hdcp && IS_REACHABLE(CONFIG_DRM_DISPLAY_HELPER) &&
+ 	    IS_ENABLED(CONFIG_DRM_DISPLAY_HDCP_HELPER))
+ 		drm_connector_attach_content_protection_property(connector, true);
+--- a/drivers/gpu/drm/bridge/panel.c
++++ b/drivers/gpu/drm/bridge/panel.c
+@@ -4,6 +4,7 @@
+  * Copyright (C) 2017 Broadcom
+  */
+ 
++#include <linux/backlight.h>
+ #include <linux/debugfs.h>
+ #include <linux/export.h>
+ 
+@@ -22,6 +23,7 @@
+ 	struct drm_bridge bridge;
+ 	struct drm_connector connector;
+ 	struct drm_panel *panel;
++	struct drm_property *brightness_property;
+ 	u32 connector_type;
+ };
+ 
+@@ -205,6 +207,72 @@
+ 		panel->funcs->debugfs_init(panel, root);
+ }
+ 
++static int panel_bridge_add_connector_properties(struct drm_bridge *bridge,
++						 struct drm_connector *connector)
++{
++	struct panel_bridge *panel_bridge = drm_bridge_to_panel_bridge(bridge);
++	struct backlight_device *bd = panel_bridge->panel->backlight;
++	struct drm_property *prop;
++
++	if (!bd)
++		return 0;
++
++	/*
++	 * Range matches the vendor display driver's connector property of the
++	 * same name, installed as an integer range [0, 0xffff] with no flags,
++	 * so that a composer HAL written against that driver keeps working.
++	 */
++	prop = drm_property_create_range(connector->dev, 0, "brightness", 0, 0xffff);
++	if (!prop)
++		return -ENOMEM;
++
++	panel_bridge->brightness_property = prop;
++
++	drm_object_attach_property(&connector->base, prop, bd->props.brightness);
++
++	return 0;
++}
++
++static int
++panel_bridge_atomic_set_connector_property(struct drm_bridge *bridge,
++					   struct drm_connector_state *state,
++					   struct drm_property *property,
++					   uint64_t val)
++{
++	struct panel_bridge *panel_bridge = drm_bridge_to_panel_bridge(bridge);
++	struct backlight_device *bd = panel_bridge->panel->backlight;
++
++	if (!bd || property != panel_bridge->brightness_property)
++		return -EINVAL;
++
++	/*
++	 * Applied here rather than at commit time, and errors are dropped: the
++	 * level is not frame-accurate, and a panel that is powered down cannot
++	 * take the DCS write - failing the commit over that would lose the
++	 * display entirely.
++	 */
++	backlight_device_set_brightness(bd,
++					min_t(u64, val, bd->props.max_brightness));
++
++	return 0;
++}
++
++static int
++panel_bridge_atomic_get_connector_property(struct drm_bridge *bridge,
++	const struct drm_connector_state *state, struct drm_property *property,
++	uint64_t *val)
++{
++	struct panel_bridge *panel_bridge = drm_bridge_to_panel_bridge(bridge);
++	struct backlight_device *bd = panel_bridge->panel->backlight;
++
++	if (!bd || property != panel_bridge->brightness_property)
++		return -EINVAL;
++
++	*val = bd->props.brightness;
++
++	return 0;
++}
++
+ static const struct drm_bridge_funcs panel_bridge_bridge_funcs = {
+ 	.attach = panel_bridge_attach,
+ 	.detach = panel_bridge_detach,
+@@ -218,6 +286,9 @@
+ 	.atomic_destroy_state = drm_atomic_helper_bridge_destroy_state,
+ 	.atomic_get_input_bus_fmts = drm_atomic_helper_bridge_propagate_bus_fmt,
+ 	.debugfs_init = panel_bridge_debugfs_init,
++	.add_connector_properties = panel_bridge_add_connector_properties,
++	.connector_atomic_set_property = panel_bridge_atomic_set_connector_property,
++	.connector_atomic_get_property = panel_bridge_atomic_get_connector_property,
+ };
+ 
+ /**

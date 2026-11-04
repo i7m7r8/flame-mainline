@@ -190,7 +190,7 @@ is not mistaken for a port bug.
 | `/dev/qti-smmu-proxy` | string built in `DmaManager::GetInstance` (@0x16db8) and the snapalloc ctor (@0x2c39c) | no such driver | **resolved, and it is not a gap.** The vendor module (`out/re/ko/smmu_proxy_dlkm.ko`) is a Gunyah client: it registers `smmu-proxy-sender`, reads `qti,smmu-proxy-cb-id`, and its `smmu_proxy_dev_ioctl` forwards map/unmap/`switch_sid` to *another VM* over `gh_msgq_send`/`gh_msgq_recv`, lending the buffer with `mem_buf_lend`. Its `.modinfo` depends are `smcinvoke_dlkm,mem_buf_dev,gh_msgq,qcom_dma_heaps`. Nothing normal-allocation ever opens it - which matches the decompile, where the path is only constructed and stored - and no display driver registers its callbacks: `msm_drm.ko`, `msm_kgsl.ko`, `camera.ko` and `heap_mem_ext_v01.ko` contain zero "proxy" strings. So the loss is trusted-UI/secure buffer mapping into a protected context bank, which is already an accepted loss with the secure heaps. |
 | `sde_drm_*` DRM properties | `libsdedrm.so` (`DRMPropertyManager::GetPropertyEnum` @0x42254, `DRMCrtc/DRMConnector/DRMPlane::ParseProperties`, `DRMPlane::GetTypeInfo`) | mainline dpu1 creates none of them | **still the top display risk, narrowed to one site.** The names are not in the file - they are built from length-switched character compares, so `strings` shows only `sde_drm_csc_v1`, `sde_drm_roi_v1`, `sde_drm_scaler_v2`. `ParseProperties` walks `drmModeObjectGetProperties()` and maps each name through `GetPropertyEnum`, so a property the kernel does not have is skipped with `DRMProperty %s missing from global property mapping` and an extra one is simply not in the map. What makes this more than cosmetic is that the library also links libc++'s `map::at`, whose `key not found` path is referenced from nine places: `DRMConnectorManager::Free`, `DRMEncoderManager::DumpById`, `DRMCrtcManager::{DumpById,Perform,Free,PostValidate,PostCommit}`, `DRMPlaneManager::DumpById` and `DRMPlane::GetTypeInfo`. Eight of those are keyed by DRM *object id* and only throw on a teardown race. One is not: `DRMPlane::GetTypeInfo(const map<DRMProperty, tuple<uint64_t, drmModePropertyPtr>> &)` is keyed by **property enum**, so a plane-classification property the vendor driver would have created and mainline does not is an uncaught `std::out_of_range` inside the composer, at plane enumeration, before any frame is ever posted. Outcomes are one boot apart: either logcat is noisy with "missing from global property mapping" and the UI works (degraded colour, demura, LTM), or `vendor.qti.hardware.display.composer-service` dies on the first commit. Read it with `logcat -s SDM libsdedrm` and `dumpsys SurfaceFlinger \| head` before changing anything. If it is the second case the fix is to hand the HAL the properties it enumerates, not to change the compositor. |
 | `/sys/module/msm_drm/parameters/` | `HWInfoDRM::GetPanelBootParamString` (libsdmdal.so @0x1dbd0) | built-in, and the module is `msm` | read fails, panel boot strings unavailable. Cosmetic. |
-| `/sys/class/backlight/panel%d-backlight/` | `HWPeripheralDRM::GetHWPanelMaxBrightness` (@0x31c80) | DSI panel brightness in mainline is a DRM property, not a backlight device | **gap.** Fixable in our panel driver by registering a `panel0-backlight` device. |
+| `/sys/class/backlight/panel%d-backlight/` | `HWPeripheralDRM::GetHWPanelMaxBrightness` (@0x31be8) | DSI panel brightness in mainline is a DRM property, not a backlight device | **fixed twice over**: the c3f panel registers `panel0-backlight` with `max_brightness=4095`, and patch 0010 gives the connector the `brightness` property the level is actually committed through. |
 | `/dev/video`, `/sys/class/video4linux/video` (rotator) | `HWInfoDRM::GetHWRotatorInfo` (@0x1b30c) | no SM4450 rotator driver | HWC loses the rotator and falls back to GPU. |
 
 ### The property set the vendor display driver had and mainline does not
@@ -593,7 +593,20 @@ the vendor `msm_drm.ko`, because none of it is documented anywhere:
   `AtomicAddProperty` failure only logs (0xd78e) and continues the loop.
   In the vendor kernel `brightness`, `bl_scale`, `sv_bl_scale`, `qsync_mode` and
   `dimming_bl_lut` are installed by `sde_connector_init`, i.e. on the
-  **connector**, not the CRTC.
+  **connector**, not the CRTC. That install is directly measurable: in
+  `msm_drm.ko`, `sde_connector_init` (0xb06f0) reaches `brightness`
+  (.rodata 0x63ef0) at 0xb12a8 with flags 0, min 0, **max 0xffff** and property
+  index 29, via `_msm_property_install_integer` (0x17393c), which tail-calls
+  `drm_property_create_range(dev, flags, name, min, max)`. Patch 0010
+  reproduces that shape on the connector mainline actually uses - the
+  `drm_bridge_connector` sitting behind the panel bridge, because 7.1.2 has no
+  `dpu_connector.c` and `dsi_manager` attaches its chain with
+  `DRM_BRIDGE_ATTACH_NO_CONNECTOR` - through two new optional
+  `drm_bridge_funcs` hooks forwarded by the bridge connector. The write goes
+  out at set time, clamped to the class device's `max_brightness`, and its
+  errors are dropped: a panel that is powered down cannot take the DCS 0x51
+  write, and propagating that would fail the whole atomic commit and lose the
+  display in order to keep a brightness update.
 - **The other UBWC modifiers are refused on purpose.** The vendor decodes
   `(0x05<<56)|n` for n in 1,2,3,7,8,9,0A,0B,0E,0F,10 into a 48-byte format table
   and accepts whichever row matches the fourcc - `sde_plane_format_mod_supported`
