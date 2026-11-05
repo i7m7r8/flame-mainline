@@ -32,11 +32,15 @@ visible: every driver flame needs is built into the Image, so the module phase
 has nothing left to do, and a future ROM whose `/init` differs is refused below
 rather than silently shipped half-patched.
 
-The bytes come from the ROM, so CI never runs this: it belongs next to
-attach_rom_ramdisk.py in the local step. Run it on the ROM's generic ramdisk and
-hand the result to that script with --rom-ramdisk.
+The bytes come from the ROM, so this runs where the ROM's bytes are: CI runs it
+inside the "Attach the ROM's first stage" step, on the hash-checked download, and
+hands the result to attach_rom_ramdisk.py with --rom-ramdisk. A user attaching
+their own copy runs it the same way, and may point it straight at their boot
+image - it reads the ramdisk section out of a v3/v4 Android boot image too.
 
-  python3 tools/patch_init_module_fatal.py ramdisk.img -o ramdisk-patched.img
+  python3 tools/patch_init_module_fatal.py boot.img -o ramdisk-patched.img
+  python3 tools/attach_rom_ramdisk.py --boot <ci.img> \\
+          --rom-ramdisk ramdisk-patched.img -o <final.img>
 """
 import argparse
 import hashlib
@@ -47,6 +51,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from mklz4legacy import wrap                    # noqa: E402
 from payload_extract import lz4_frame_decompress  # noqa: E402
+from attach_rom_ramdisk import read_boot            # noqa: E402
 
 LZ4_LEGACY = b"\x02\x21\x4c\x18"
 
@@ -85,61 +90,86 @@ def cpio_walk(cpio):
         i = data + size + ((4 - (size & 3)) & 3)
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("src", help="the ROM's generic ramdisk (LZ4 legacy or cpio)")
-    ap.add_argument("-o", "--out", required=True)
-    a = ap.parse_args()
+def apply_to_image(raw, tag):
+    """Take the module-load abort out of the /init inside a generic ramdisk.
 
-    raw = open(a.src, "rb").read()
+    raw is the ramdisk section as bytes: an LZ4 legacy frame or a bare newc cpio.
+    Returns (bytes safe to pack, lines saying what happened). Refuses by raising
+    SystemExit, which is what a build step wants: a run that cannot identify the
+    /init these addresses belong to must fail rather than ship a first stage that
+    aborts. Idempotent, so a pipeline may run it over its own output.
+    """
     compressed = raw[:4] == LZ4_LEGACY
     cpio = lz4_frame_decompress(raw) if compressed else raw
 
     if cpio[:6] not in (b"070701", b"070702"):
-        sys.exit(f"{a.src}: neither an LZ4 legacy frame nor a newc cpio "
+        sys.exit(f"{tag}: neither an LZ4 legacy frame nor a newc cpio "
                  f"(starts {cpio[:8]!r})")
 
     inits = [e for e in cpio_walk(cpio) if e[0].lstrip("./") == "init"]
     if len(inits) != 1:
-        sys.exit(f"{a.src}: found {len(inits)} entries named init, expected 1")
+        sys.exit(f"{tag}: found {len(inits)} entries named init, expected 1")
     _, _, data_off, size = inits[0]
     if size != INIT_SIZE:
-        sys.exit(f"{a.src}: /init is {size} bytes, not the {INIT_SIZE} this "
+        sys.exit(f"{tag}: /init is {size} bytes, not the {INIT_SIZE} this "
                  "patch was derived from; the addresses below are for that "
                  "build and this ROM may be another one")
 
     off = data_off + (VETO_VA - VETO_ELF_DELTA)
     here = cpio[off:off + 4]
-    if here == VETO_AFTER:
-        print(f"{a.src}: already patched (0x{VETO_VA:x} is the unconditional "
-              "branch)")
+    already = here == VETO_AFTER
+    if already:
+        lines = [f"{tag}: already patched (0x{VETO_VA:x} is the unconditional "
+                 "branch)"]
     elif here != VETO_BEFORE:
-        sys.exit(f"{a.src}: 0x{VETO_VA:x} holds {here.hex()}, not the "
+        sys.exit(f"{tag}: 0x{VETO_VA:x} holds {here.hex()}, not the "
                  f"tbnz {VETO_BEFORE.hex()} this patch expects; refusing to "
                  "guess")
     else:
         cpio = cpio[:off] + VETO_AFTER + cpio[off + 4:]
+        lines = []
 
-    original = cpio if here == VETO_AFTER else (
-        cpio[:off] + VETO_BEFORE + cpio[off + 4:])
+    original = cpio if already else (cpio[:off] + VETO_BEFORE + cpio[off + 4:])
     diff = sum(1 for x, y in zip(cpio, original) if x != y)
 
     # Everything but those four bytes has to be the archive we were given.
     if compressed:
         out = wrap(cpio)
         if lz4_frame_decompress(out) != cpio:
-            sys.exit("re-framed archive does not read back identically")
+            sys.exit(f"{tag}: re-framed archive does not read back identically")
     else:
         out = cpio
-    open(a.out, "wb").write(out)
 
-    print(f"{a.out}: /init at ramdisk offset 0x{off:x} (VA 0x{VETO_VA:x})")
-    print(f"  {VETO_BEFORE.hex()} -> {VETO_AFTER.hex()}"
-          f"   tbnz w21,#0 -> b, so a failed vendor insmod no longer aborts")
-    print(f"  archive differs in {diff} byte(s), as expected")
-    print(f"  ramdisk {sha(raw)} -> {sha(out)}  "
-          f"({len(raw)} -> {len(out)} bytes"
-          f"{', re-framed literal-only, so larger' if compressed and len(out) > len(raw) else ''})")
+    lines.insert(0, f"/init at ramdisk offset 0x{off:x} (VA 0x{VETO_VA:x})")
+    lines.append(f"  {VETO_BEFORE.hex()} -> {VETO_AFTER.hex()}"
+                 "   tbnz w21,#0 -> b, so a failed vendor insmod no longer aborts")
+    lines.append(f"  archive differs in {diff} byte(s), as expected")
+    lines.append(f"  ramdisk {sha(raw)} -> {sha(out)}  "
+                 f"({len(raw)} -> {len(out)} bytes"
+                 f"{', re-framed literal-only, so larger' if compressed and len(out) > len(raw) else ''})")
+    return out, lines
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("src", help="the ROM's generic ramdisk (LZ4 legacy or cpio), "
+                                "or the ROM's boot image to take it from")
+    ap.add_argument("-o", "--out", required=True)
+    a = ap.parse_args()
+
+    raw = open(a.src, "rb").read()
+    tag = a.src
+    if raw[:8] == b"ANDROID!":
+        _, ramdisk_section, _, _ = read_boot(a.src)
+        raw, tag = ramdisk_section, f"{a.src} ramdisk section"
+        print(f"{a.src}: v3/v4 boot image, taking its {len(raw)}-byte ramdisk")
+
+    patched, lines = apply_to_image(raw, tag)
+    open(a.out, "wb").write(patched)
+
+    print(f"{a.out}: {lines[0]}")
+    for line in lines[1:]:
+        print(line)
     print(f"  next: python3 tools/attach_rom_ramdisk.py --boot <ci.img> "
           f"--rom-ramdisk {a.out} -o <final.img>")
 

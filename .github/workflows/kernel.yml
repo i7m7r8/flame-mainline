@@ -406,33 +406,51 @@ jobs:
             https://raw.githubusercontent.com/i7m7r8/flame-stock/main/ramdisk.img
           ( cd "$RUNNER_TEMP" && sha256sum -c \
               "$GITHUB_WORKSPACE/config/stock-ramdisk.sha256" )
+          # The hash above is what makes the next line safe. This ROM's /init
+          # LOG(FATAL)s when the vendor module list fails to load, and our
+          # kernel has CONFIG_MODULES=n, so that abort is certain and first
+          # stage never reaches second stage. One instruction of the archive we
+          # already carry takes it out; the tool refuses - and fails this step -
+          # unless /init is exactly the 2763568-byte binary those addresses come
+          # from and the word at 0x31b3f0 is exactly the tbnz it rewrites.
+          python3 "$GITHUB_WORKSPACE/tools/patch_init_module_fatal.py" \
+            "$RUNNER_TEMP/ramdisk.img" \
+            -o "$RUNNER_TEMP/ramdisk-patched.img"
           python3 "$GITHUB_WORKSPACE/tools/attach_rom_ramdisk.py" \
             --boot flame-mainline-boot.img \
-            --rom-ramdisk "$RUNNER_TEMP/ramdisk.img" \
+            --rom-ramdisk "$RUNNER_TEMP/ramdisk-patched.img" \
             -o flame-mainline-final.img
           # The tool re-reads its own output and stops unless the kernel and the
           # ramdisk sections are byte-identical to the two inputs, so arriving
-          # here is the check. Only the packed image is published; ramdisk.img
+          # here is the check. Only the packed image is published; the ramdisk
           # stays in $RUNNER_TEMP, which the runner deletes.
           sha256sum flame-mainline-final.img >> SHA256SUMS
           {
             echo "flame-mainline-final.img is the image to flash."
             echo
             echo "  kernel section: built in this run (payload.bin = Image + flame dtb + shim)"
-            echo "  ramdisk section: the ROM's own generic ramdisk, 2600656 bytes,"
-            echo "    sha256 $(awk '/^[0-9a-f][0-9a-f][0-9a-f]/{print $1; exit}' \
-                    "$GITHUB_WORKSPACE/config/stock-ramdisk.sha256"),"
-            echo "    fetched from the private i7m7r8/flame-stock repo and hash-checked here."
+            echo "  ramdisk section: the ROM's own generic ramdisk, with one"
+            echo "    instruction of /init changed (see tools/patch_init_module_fatal.py):"
+            echo "    as flashed $(stat -c %s "$RUNNER_TEMP/ramdisk.img") bytes,"
+            echo "      sha256 $(sha256sum "$RUNNER_TEMP/ramdisk.img" | cut -c1-64),"
+            echo "    as packed   $(stat -c %s "$RUNNER_TEMP/ramdisk-patched.img") bytes,"
+            echo "      sha256 $(sha256sum "$RUNNER_TEMP/ramdisk-patched.img" | cut -c1-64)."
+            echo "    The stock half is fetched from the private i7m7r8/flame-stock"
+            echo "    repo and hash-checked against config/stock-ramdisk.sha256 here."
             echo
             echo "That section is Infinity X Android 17's. If the ROM you are on is not"
             echo "the same build, or you would rather not take a runner's word for it,"
             echo "attach your own copy of it and flash that instead:"
             echo
             echo "  su 0 cp /dev/block/by-name/boot\$(getprop ro.boot.slot_suffix) /sdcard/boot-stock.img"
+            echo "  python3 tools/patch_init_module_fatal.py boot-stock.img -o ramdisk-patched.img"
             echo "  python3 tools/attach_rom_ramdisk.py --boot flame-mainline-boot.img \\"
-            echo "          --rom-boot boot-stock.img -o flame-mainline-final.img"
+            echo "          --rom-ramdisk ramdisk-patched.img -o flame-mainline-final.img"
             echo
-            echo "FLASH.txt is the full procedure either way."
+            echo "If the patch step refuses, your ROM's /init is a different build:"
+            echo "flashing the unpatched ramdisk boots a first stage that aborts in its"
+            echo "module phase, so take the refusal as the answer, not as a flag to"
+            echo "force. FLASH.txt is the full procedure either way."
           } > RAMDISK.txt
           cat RAMDISK.txt >> "$GITHUB_STEP_SUMMARY"
           ls -lh flame-mainline-boot.img flame-mainline-final.img

@@ -403,6 +403,22 @@ unlinked before the vendor's directory entry is made. Dropping the vendor half
 entirely is not on the table either: the same half carries
 `system/etc/fstab.default`, which first-stage mount needs.
 
+That sentence is worth being exact about, because the token that finds the file is
+a boot-or-halt decision. `ReadDefaultFstab()` tries, in order,
+`/first_stage_ramdisk/fstab.<ro.boot.hardware>` and
+`/first_stage_ramdisk/system/etc/fstab.<ro.boot.fstab_suffix>`. Neither ramdisk
+holds an `fstab.qcom`, so the first candidate misses by construction; the second
+resolves *only* when `ro.boot.fstab_suffix=default`, which is the one value with a
+file behind it. The ROM's own cmdline blob (`stock/vendor_boot.img` at
+`0x1314000`) carries exactly six `androidboot.` tags - hardware, memcg,
+serialconsole, usbcontroller, load_modules_parallel, vendor.qspa - and neither
+`fstab_suffix` nor `boot_devices` is among them, so on stock those two arrive from
+ABL at run time. `handover.c` appends ABL's tags *after* our `chosen` bootargs and
+init grafts them in order, so ours are the fallback, not the override: if ABL
+supplies a suffix, its value wins and nothing changes, and if it does not - a
+different ABL, or an injected tree that lost the tag - the line in
+`dts/sm4450-xiaomi-flame.dts` is what first stage mounts by.
+
 What is left is one instruction, in the `/init` we already carry: `tools/patch_init_module_fatal.py`
 rewrites `0x31b3f0` from `tbnz w21, #0` (`d5 00 00 37`) to the unconditional
 branch its own success path takes (`b 0x31b408`, `06 00 00 14`), so first stage
@@ -410,9 +426,12 @@ proceeds exactly as if the modules had loaded. Nothing else reads the result. Th
 tool is deliberately paranoid: it refuses unless `/init` is the 2,763,568-byte
 build these addresses come from, unless the four bytes at the target are the
 expected `tbnz`, and unless the re-framed archive reads back identically; a future
-ROM therefore gets a hard error rather than a silently half-patched image. It runs
-in the local step, never in CI (the bytes are the ROM's), and its output feeds
-`attach_rom_ramdisk.py --rom-ramdisk`. Re-framing is literal-only LZ4, so the
+ROM therefore gets a hard error rather than a silently half-patched image. CI runs
+it in the "Attach the ROM's first stage" step, on the hash-checked download from
+the private stock repo, and its output feeds `attach_rom_ramdisk.py
+--rom-ramdisk`; a refusal fails that build rather than publishing an image whose
+first stage aborts. Anyone attaching their own copy runs it the same way, and may
+point it at their boot image directly. Re-framing is literal-only LZ4, so the
 section grows from 2,600,656 to 4,912,902 bytes; the kernel's decompressor is fine
 with that and ABL only copies the bytes.
 
