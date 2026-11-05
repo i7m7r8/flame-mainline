@@ -36,7 +36,20 @@ pushed here.
    "Failed to load kernel modules" fatal only fires when it *did* load at least
    one module (`module_count_` is bumped on a successful `finit_module`, and is
    0 here), so a kernel that loads nothing passes. No userspace patch, no
-   `finit_module` lie.
+   `finit_module` lie. The same holds for the handshake those modules feed:
+   `vendor.all.modules.ready` is set by exactly one writer,
+   `/vendor/bin/vendor_modprobe.sh`, and only after its *first* `modprobe`
+   succeeds — a failure takes `continue` and the script exits 1 without ever
+   reaching the `setprop`. So on our kernel that property stays unset, and it
+   has exactly two readers, neither of which can stall a boot:
+   `init.qti.kernel.target.rc:7` is an `on post-fs` action whose only command is
+   the `wait_for_prop`, and `init.target.rc:183` gates the charger-mode
+   `mount_all`. `wait_for_prop` defers the rest of its own action rather than
+   blocking the main loop, so what is left behind is nothing on the normal path
+   and one missing charger mount. (Verified by raw-grepping the partition images:
+   four copies of the name in `vendor.img` — the script, the two readers, and one
+   `property_contexts` line — and zero in `system.img`, so no
+   `on property:` trigger anywhere depends on it.)
 4. **A boot that fails is visible.** Two channels, because neither one alone
    is enough. The panel becomes a text console: ABL leaves the display scanning
    a framebuffer in RAM, the board DTS declares it as a `simple-framebuffer`,

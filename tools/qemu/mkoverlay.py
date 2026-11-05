@@ -11,9 +11,6 @@ system/etc/fstab.default replaces the ROM's copy for the harness run.
 import os
 import sys
 
-import os
-import sys
-
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))
 OUT = os.environ.get("FLAME_QEMU_OUT", "/tmp/flame-qemu")
