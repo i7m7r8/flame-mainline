@@ -1,0 +1,122 @@
+/*
+ * QEMU harness tree for the flame port. It is NOT the phone's tree: QEMU's virt
+ * machine has no SM4450, so this describes the machine QEMU actually gives us,
+ * but arranges the devices *under a soc node the way our real tree does*, so
+ * that the sysfs paths Android's init parses have the same shape.
+ *
+ * harness-soc.dts   : soc { }            - what the vendor tree and the fix give
+ * harness-socat0.dts: soc@0 { }          - what our built dtb says today
+ *                                                     (out: /tmp/artqemu/unz/
+ *                                                       sm4450-xiaomi-flame.dtb
+ *                                                       line 603 "soc@0 {")
+ * The only difference between the two runs is that node name, so any change in
+ * init's behaviour is attributable to it.
+ */
+/dts-v1/;
+
+/ {
+	#address-cells = <2>;
+	#size-cells = <2>;
+	compatible = "linux,dummy-virt";
+	model = "flame-qemu-harness";
+	interrupt-parent = <&gic>;
+	dma-coherent;
+
+	chosen {
+		/* bootargs are replaced by -append; this is only a fallback. */
+		bootargs = "console=ttyAMA0 loglevel=8";
+		stdout-path = "serial0:115200n8";
+	};
+
+	aliases {
+		serial0 = &uart0;
+	};
+
+	cpus {
+		#address-cells = <2>;
+		#size-cells = <0>;
+
+		cpu@0 {
+			device_type = "cpu";
+			compatible = "arm,armv8";
+			reg = <0 0>;
+			enable-method = "psci";
+		};
+		cpu@1 {
+			device_type = "cpu";
+			compatible = "arm,armv8";
+			reg = <0 1>;
+			enable-method = "psci";
+		};
+	};
+
+	psci {
+		compatible = "arm,psci-1.0", "arm,psci-0.2", "arm,psci";
+		method = "hvc";
+		cpu_on = <0xc4000003>;
+		cpu_off = <0x84000002>;
+	};
+
+	timer {
+		compatible = "arm,armv8-timer", "arm,armv7-timer";
+		interrupt-parent = <&gic>;
+		interrupts = <1 13 0xf04>, <1 14 0xf04>, <1 11 0xf04>, <1 10 0xf04>;
+	};
+
+	memory@40000000 {
+		device_type = "memory";
+		reg = <0 0x40000000 0 0x14000000>;   /* 320 MiB, matches run.sh's -m 320 */
+	};
+
+	fixedclock: clock-24mhz {
+		compatible = "fixed-clock";
+		#clock-cells = <0>;
+		clock-frequency = <24000000>;
+	};
+
+	SOCNODE {
+		#address-cells = <2>;
+		#size-cells = <2>;
+		ranges;
+		compatible = "simple-bus";
+
+		gic: interrupt-controller@8000000 {
+			compatible = "arm,cortex-a15-gic";
+			reg = <0 0x8000000 0 0x1000>, <0 0x8010000 0 0x2000>;
+			interrupt-controller;
+			#interrupt-cells = <3>;
+			#address-cells = <2>;
+			#size-cells = <2>;
+			ranges;
+		};
+
+		uart0: pl011@9000000 {
+			compatible = "arm,pl011", "arm,primecell";
+			reg = <0 0x9000000 0 0x1000>;
+			interrupts = <0 1 4>;
+			clock-names = "uartclk", "apb_pclk";
+			clocks = <&fixedclock>, <&fixedclock>;
+		};
+
+		/* QEMU 10 -M virt realizes a -device virtio-*-device into the *highest*
+	 * free slot and counts down, so two disks land at 0xa003e00 (SPI 47) and
+	 * 0xa003c00 (SPI 46) - read that out of QEMU's own tree with
+	 * `-M virt,gic-version=2,dumpdtb=x.dtb -nic none` plus dtc. Wrong reg means
+	 * the slot is empty, device id reads 0, and virtio_mmio returns -ENODEV
+	 * silently; right reg with the wrong SPI resets the device and then waits
+	 * for an interrupt forever, which looks like a boot that stops at 3.9 s. */
+		vdev0: virtio_mmio@a003e00 {
+			dma-coherent;
+			compatible = "virtio,mmio";
+			reg = <0 0xa003e00 0 0x200>;
+			interrupts = <0 47 1>;
+		};
+
+		vdev1: virtio_mmio@a003c00 {
+			dma-coherent;
+			compatible = "virtio,mmio";
+			reg = <0 0xa003c00 0 0x200>;
+			interrupts = <0 46 1>;
+		};
+	};
+};

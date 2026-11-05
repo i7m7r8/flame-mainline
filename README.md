@@ -122,6 +122,7 @@ python3 tools/attach_rom_ramdisk.py --boot flame-mainline-boot.img \
 | `patches/rocknix-sm4450.txt` | the upstream SM4450 series CI fetches |
 | `config/flame.fragment` | the whole config delta, asserted symbol by symbol |
 | `tools/` | shim, payload and boot-image packers, handover self-test, ramdisk attach tool |
+| `tools/qemu/` | run the ROM's own first stage against the CI kernel under QEMU (`docs/qemu-harness.md`) |
 | `docs/` | `mainline-port.md` (the port), `hardware-flame.md` (UART, partitions) |
 | `stock/` | ROM extracts, kept locally, **never committed** |
 

@@ -409,8 +409,9 @@ a boot-or-halt decision. `ReadDefaultFstab()` tries, in order,
 `/first_stage_ramdisk/system/etc/fstab.<ro.boot.fstab_suffix>`. Neither ramdisk
 holds an `fstab.qcom`, so the first candidate misses by construction; the second
 resolves *only* when `ro.boot.fstab_suffix=default`, which is the one value with a
-file behind it. The ROM's own cmdline blob (`stock/vendor_boot.img` at
-`0x1314000`) carries exactly six `androidboot.` tags - hardware, memcg,
+file behind it. The ROM's own bootconfig blob (`stock/vendor_boot.img` at
+`0x1314000`, the page after its DTB set, pointed at by the trailing `bootconfig`
+token in vendor_boot's cmdline) carries exactly six `androidboot.` tags - hardware, memcg,
 serialconsole, usbcontroller, load_modules_parallel, vendor.qspa - and neither
 `fstab_suffix` nor `boot_devices` is among them, so on stock those two arrive from
 ABL at run time. `handover.c` appends ABL's tags *after* our `chosen` bootargs and
@@ -434,6 +435,36 @@ first stage aborts. Anyone attaching their own copy runs it the same way, and ma
 point it at their boot image directly. Re-framing is literal-only LZ4, so the
 section grows from 2,600,656 to 4,912,902 bytes; the kernel's decompressor is fine
 with that and ABL only copies the bytes.
+
+### The halt we could reproduce without a phone: `soc@0`
+
+First stage does not create `/dev/block/by-name/*` from partition numbers; it
+walks `/sys/dev/block`, strips `/devices/platform/` off each realpath and keeps
+only what starts with an entry of `androidboot.boot_devices`. Upstream names the
+SM4450 bus node `soc: soc@0` (`sm4450.dtsi:396`); the node has `ranges` and
+`#address-cells` but no `reg`, and `of_device_make_bus_id()` keeps the unit
+address in that case, so our kernel put the UFS host at
+`/sys/devices/platform/soc@0/1d84000.ufshc` while the bootargs said
+`1d84000.ufshc`. Nothing matched, and the boot stopped at
+
+```
+init: partition(s) not found after polling timeout: metadata, system, vendor
+init: Failed to mount required partitions early ...
+```
+
+`patches/local/0013` renames the node to `soc` and
+`dts/sm4450-xiaomi-flame.dts` gained the `soc/` prefix, which `tools/qemu/run.sh
+matrix` measured rather than argued: with the ROM's own `/init`, the same CI
+kernel and a GPT disk carrying this fstab's PARTNAMEs, `soc` + `soc/<dev>`
+mounts `/metadata` and `/system`, and `soc@0` + `soc/<dev>` reproduces the halt
+above. Bending only the bootargs (`soc@0/<dev>`) also mounts, but cannot satisfy
+the rest of the ROM: `vendor_sepolicy.cil` carries 258 `genfscon sysfs
+"/devices/platform/soc/...` labels and none for `soc@0` - sysfs is labelled by
+path - and `init.target.rc`, `vendor_ueventd.rc`, `vendor.qti.smp2p.rc` and the
+`sysfs_path=` on the `/data` fstab line all spell the same unprefixed path.
+Details, the four-way table and the harness's own traps (QEMU's virtio-mmio slot
+numbering, hand-building a GPT the kernel accepts) are in
+`docs/qemu-harness.md`.
 
 ## Boot handover (why a shim is needed)
 
