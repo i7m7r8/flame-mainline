@@ -260,13 +260,22 @@ jobs:
           # halves of the contract: the property names the code reads live in
           # the Image, the channel and compatible strings the code only compares
           # against live in the dtb.
+          # The last group is the /data crypto chain, and it is here for a
+          # different reason: dm-default-key reaches the tree through an anchored
+          # manifest rule, the one splice mechanism that can drop a file without
+          # any build error if the anchor moves. 'default-key' is the target name
+          # dmctl asks for, 'inlinecrypt' the f2fs mount option vold's fstab line
+          # passes, and the ICE trio is what the driver prints or refuses when
+          # wrapped keys are asked of it.
           for s in \
             'max_blendstages=' 'smart_dma_rev=' 'qseed_type=' \
             'panel0-backlight' 'xiaomi,c3f-720x1640-video' \
             'qcom,fastrpc' 'qcom,non-secure-domain' \
             'qcom,sm4450-adsp-pas' 'qcom,sm4450-wpss-pas' \
             'adsp.mdt' 'wpss.mdt' \
-            'qcom,adsp-loader' 'boot_adsp'; do
+            'qcom,adsp-loader' 'boot_adsp' \
+            'default-key' 'inlinecrypt' 'qcom-ice' 'Using HWKM' \
+            'no support for wrapped keys'; do
             grep -qaF -- "$s" Image || {
               echo "Image is missing '$s': a contract with userspace, or a local patch that did not apply" >&2
               exit 1
