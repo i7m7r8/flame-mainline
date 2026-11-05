@@ -176,11 +176,17 @@
 .Lhand_print:
 	bl	.Lputs
 
-1:	b	1b			/* the runner times us out */
+	mov	w0, #0x0008
+	movk	w0, #0x8400, lsl #16	/* PSCI SYSTEM_OFF (0x84000008) */
+	hvc	#0
+	smc	#0
+1:	b	1b			/* fallback if PSCI not available */
 
 /* .Lputs: x0 = asciiz. QEMU virt PL011 is at 0x9000000, the smoke test target. */
 .Lputs:
 	mov	x1, #0x9000000
+	mov	w2, #0x301
+	str	w2, [x1, #0x30]		/* enable UARTEN (bit 0), TXE (bit 8), RXE (bit 9) */
 	stp	x29, x30, [sp, #-16]!
 	mov	x29, sp
 2:	ldrb	w3, [x0], #1

@@ -56,10 +56,11 @@ python3 $root/tools/mklinuxpayload.py \
 # what the phone's loader does. -dtb is what arrives in x0: it stands in for the
 # tree ABL builds from the vendor dtb, so the handover copy is checked against a
 # tree that is not the one we hand to the kernel.
-timeout 90 qemu-system-aarch64 -M virt -cpu max -m 512 -nographic -display none \
-  -nic none -no-reboot -no-shutdown \
+timeout 15 qemu-system-aarch64 -M virt -cpu max -m 512 -display none \
+  -nic none -no-reboot \
+  -serial file:"$build/console.log" \
   -kernel "$build/payload.bin" -dtb "$build/vendor.dtb" \
-  >"$build/console.log" 2>&1 || true
+  >/dev/null 2>&1 || true
 sed 's/^/qemu: /' "$build/console.log"
 grep -q 'SHIM-ENTRY FDT-OK COPY-OK HAND-OK' "$build/console.log" || {
   echo "FAIL: shim did not hand over correctly" >&2; exit 1; }
