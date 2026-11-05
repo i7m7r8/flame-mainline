@@ -41,6 +41,10 @@ image - it reads the ramdisk section out of a v3/v4 Android boot image too.
   python3 tools/patch_init_module_fatal.py boot.img -o ramdisk-patched.img
   python3 tools/attach_rom_ramdisk.py --boot <ci.img> \\
           --rom-ramdisk ramdisk-patched.img -o <final.img>
+
+--check writes nothing and fails unless the archive already carries the skip, so CI
+can assert it against the packed image it is about to publish - the section is read
+back out of the Android boot header, which is the same path a phone takes.
 """
 import argparse
 import hashlib
@@ -154,8 +158,14 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("src", help="the ROM's generic ramdisk (LZ4 legacy or cpio), "
                                 "or the ROM's boot image to take it from")
-    ap.add_argument("-o", "--out", required=True)
+    ap.add_argument("-o", "--out", help="where to write the patched ramdisk")
+    ap.add_argument("--check", action="store_true",
+                    help="write nothing and fail unless the archive already has the "
+                         "skip: what a build step asserts about its own output")
     a = ap.parse_args()
+
+    if a.check and not a.out:
+        a.out = "/dev/null"
 
     raw = open(a.src, "rb").read()
     tag = a.src
@@ -165,6 +175,19 @@ def main():
         print(f"{a.src}: v3/v4 boot image, taking its {len(raw)}-byte ramdisk")
 
     patched, lines = apply_to_image(raw, tag)
+    report = "\n".join(lines)
+
+    if a.check:
+        if "already patched" not in report:
+            sys.exit(f"{tag}: /init still tests the module result at "
+                     f"0x{VETO_VA:x}, so this image aborts in first stage and "
+                     "never reaches second stage")
+        print(f"{tag}: checked, not written; "
+              f"0x{VETO_VA:x} is the unconditional branch")
+        return
+
+    if not a.out:
+        sys.exit("no -o and no --check: refusing to patch into the void")
     open(a.out, "wb").write(patched)
 
     print(f"{a.out}: {lines[0]}")

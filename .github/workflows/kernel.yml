@@ -420,6 +420,12 @@ jobs:
             --boot flame-mainline-boot.img \
             --rom-ramdisk "$RUNNER_TEMP/ramdisk-patched.img" \
             -o flame-mainline-final.img
+          # End to end, on the bytes that ship: re-open the packed image, read its
+          # ramdisk back, and refuse to publish if /init still aborts on the module
+          # result. attach_rom_ramdisk.py already proves the section is what it was
+          # handed; this proves what it was handed is the patched one.
+          python3 "$GITHUB_WORKSPACE/tools/patch_init_module_fatal.py" \
+            flame-mainline-final.img --check
           # The tool re-reads its own output and stops unless the kernel and the
           # ramdisk sections are byte-identical to the two inputs, so arriving
           # here is the check. Only the packed image is published; the ramdisk
