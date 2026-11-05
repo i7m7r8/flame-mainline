@@ -144,6 +144,10 @@ must stay disabled (touch is on I2C for this LCM).
 
 `ssusb@a600000` (`qcom,dwc-usb3-msm`) wrapping `dwc3@a600000` (`snps,dwc3`),
 `usb_nop_phy` for the HS port plus `usb3_phy_wrapper_gcc_usb30_pipe_clk`;
+Mainline 7.1.2 has no wrapper/core split here: `dwc3-qcom` registers the core
+from its own probe and therefore names the UDC after the *glue* node, so our
+board file calls it `dwc3@a600000` to produce `a600000.dwc3` - the exact string
+the ROM reads from vendor_boot's bootconfig (`androidboot.usbcontroller`).
 Type-C handling is `qcom,ucsi`/`qcom,altmode` over **pmic_glink** and a vendor
 `fsa4480@42` flanker. Mainline needs `dwc3-qcom` (it matches `qcom,snps-dwc3`
 generically now), a QMP/USB3 PHY node and either `typec` + `pmic_glink` or the

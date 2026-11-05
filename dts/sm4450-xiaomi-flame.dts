@@ -1180,7 +1180,19 @@
 		qcom,squelch-detector-bp = <(-530)>;
 	};
 
-	usb_1: usb@a600000 {
+	/* The node name is load-bearing. 7.1.2's dwc3-qcom registers the core
+	 * itself (dwc3_core_probe at drivers/usb/dwc3/dwc3-qcom.c:708, with
+	 * qcom->dwc.dev = the glue's own struct device at :703), so the UDC is
+	 * named after this node by of_device_make_bus_id(): "a600000.dwc3" only
+	 * if the node is dwc3@<reg>. The ROM takes that name out of
+	 * vendor_boot's bootconfig - androidboot.usbcontroller=a600000.dwc3 -
+	 * which we cannot edit, and init.target.rc feeds it straight to
+	 * configfs. Named usb@a600000, as the vendor tree's wrapper node was,
+	 * the UDC would come up as a600000.usb and nothing would ever bind to
+	 * it: no adb, no gadget, no ACM shell. The vendor's own core node was
+	 * dwc3@a600000 (docs/hardware-flame.md), so this is the name that was
+	 * always meant to reach userspace. */
+	usb_1: dwc3@a600000 {
 		compatible = "qcom,sm4450-dwc3", "qcom,snps-dwc3";
 		reg = <0x0 0x0a600000 0x0 0xfc100>;
 
