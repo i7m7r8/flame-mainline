@@ -49,8 +49,10 @@ for row in "soc:soc {" "socat0:soc@0 {"; do
 	dtc -q -I dts -O dtb -o "$WORK/harness-$tag.dtb" "$WORK/h-$tag.dts" 2>/dev/null
 done
 
-boot() { # boot <dtb-tag> <boot_devices|"" rdinit> <logfile>
-	qemu-system-aarch64 -M virt,gic-version=2 -cpu max -smp 2 -m 320 \
+boot() { # boot <dtb-tag> <append> <logfile>
+	# A panic with -no-reboot halts the guest but does not make QEMU exit, so every boot
+	# needs its own timeout or the harness waits forever on a dead kernel.
+	timeout ${QEMU_TIMEOUT:-60} qemu-system-aarch64 -M virt,gic-version=2 -cpu max -smp 2 -m 320 \
 		-display none -no-reboot -nic none -serial file:"$3" \
 		-kernel "$IMAGE" -dtb "$WORK/harness-$1.dtb" -initrd "$INITRD" \
 		-drive file="$GPT",if=none,format=raw,id=gpt \
@@ -71,7 +73,7 @@ matrix)
 		log=$WORK/init-$tag-$(printf '%s' "$dev" | tr '/@' '_-').log
 		boot "$tag" "androidboot.hardware=qcom androidboot.fstab_suffix=default androidboot.slot_suffix=_a androidboot.boot_devices=$dev" "$log"
 		if grep -q "Failed to mount required partitions" "$log"; then v="FAILS - no by-name symlinks"
-		elif grep -q "partition(s) not found" "$log"; then v="FAILS - partition(s) not found"
+		elif grep -q "partition(s) not found" "$log"; then v="FAILS - boot_devices names a parent with no slices"
 		elif grep -q "check_fs(): mount(/dev/block/by-name" "$log"; then v="MOUNTS (first stage done)"
 		else v="see $log"; fi
 		printf '%-46s %s\n' "$tag + $dev" "$v"

@@ -1,20 +1,27 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * flame: /sys/kernel/boot_adsp, which the ROM's init waits for.
+ * flame: /sys/kernel/boot_adsp, the ROM's ADSP on switch.
  *
- * The stock ADSP loader is adsp_loader_dlkm.ko in the vendor ramdisk. It
- * registers a "boot_adsp" object under /sys/kernel carrying exactly two
- * write-only attributes, each mode 0220 (.data 0x110 and 0x130, both holding
- * 0x90): "boot" and "ssr". Userspace uses them as the ADSP on switch:
- * init.qti.kernel.target.rc:10 writes 1 to boot at early-boot, and
- * android.hardware.thermal-service.qti.rc:41 makes
+ * The stock ADSP loader is adsp_loader_dlkm.ko in the vendor ramdisk (its
+ * own symbols say so: adsp_loader_init_sysfs, adsp_boot_store,
+ * adsp_ssr_store, and the kobject name boot_adsp). It registers a
+ * "boot_adsp" object under /sys/kernel carrying exactly two write-only
+ * attributes, each mode 0220 (.data 0x110 and 0x130, both holding 0x90):
+ * "boot" and "ssr". Userspace uses them as the ADSP on switch:
+ * init.qti.kernel.target.rc:10 writes 1 to boot at early-boot,
+ * init.target.rc:186 writes it again in the charger path, and
+ * android.hardware.thermal-service.qti.rc:42 makes
  * "wait /sys/kernel/boot_adsp/boot" the first command of its on-boot action.
- * That wait is the reason this file exists. init's wait builtin blocks the
- * main loop with no timeout when the path is absent, and every action queued
- * behind it - including the class_start that launches the graphics and audio
- * HALs - then never runs. A kernel without this node does not boot a degraded
- * Android, it boots a hung one. init.target.rc:185 waits on the same path in
- * the charger-mode action.
+ * The live phone has the path: as uid 10412 with CapEff 0, /sys probes return
+ * EACCES where a wrong sibling returns ENOENT.
+ *
+ * That wait is not why this file exists, and a kernel without this node does
+ * not hang. The ROM's shipped /system/bin/init carries do_wait's own strings
+ * ("wait_for_file() failed", "failed to parse timeout"), and AOSP's do_wait
+ * takes kCommandRetryTimeout - 5 seconds - when the rc gives no timeout, then
+ * logs and moves on; the class_start queued behind it still runs. This file
+ * exists because the write is the only thing on this ROM that boots the ADSP
+ * at all, and audio, sensors and FastRPC all sit behind that.
  *
  * What the writes do is what the vendor driver does, out of the same two
  * exported remoteproc calls its disassembly shows: boot_store reaches

@@ -787,12 +787,17 @@
 &soc {
 	/* The node the ROM's init contract expects. Stock creates
 	 * /sys/kernel/boot_adsp/{boot,ssr} from adsp_loader_dlkm.ko in the
-	 * vendor ramdisk, and android.hardware.thermal-service.qti.rc:41 makes
+	 * vendor ramdisk, and android.hardware.thermal-service.qti.rc:42 makes
 	 * "wait /sys/kernel/boot_adsp/boot" the first command of its on-boot
-	 * action. init's wait has no timeout and blocks the main loop, so with
-	 * the node absent nothing queued behind it ever runs - the class_start
-	 * that launches the graphics and audio HALs among them. A missing node
-	 * is a hung boot, not a degraded one.
+	 * action. The live phone has the path: probed as uid 10412 with CapEff 0
+	 * it answers EACCES, where a misspelled sibling answers ENOENT, so the
+	 * ROM really does see it. That wait is not what makes the node
+	 * necessary, though - init's wait builtin is not a hang. The shipped
+	 * /system/bin/init carries do_wait's strings ("wait_for_file() failed",
+	 * "failed to parse timeout"), and in AOSP an untimed wait tries for
+	 * kCommandRetryTimeout (5 s) and then logs and moves on. The node
+	 * matters because writing 1 to it is the only way anything boots the
+	 * ADSP on this ROM - not because its absence stalls init.
 	 *
 	 * The property name and the compatible are the vendor binding's own, so
 	 * that the contract is stated in the vocabulary the ROM was built with.

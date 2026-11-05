@@ -6,6 +6,42 @@ hunks sit on shikra (SM4650) PAS entries that stock does not have; the two
 qcom_pas_data structs and the two of_match_id entries are unchanged, only the
 surrounding context is taken from the real 7.1.2 file.
 
+One deviation, ours: the ADSP descriptor's auto_boot is false, not true.
+rproc_add() boots an auto_boot rproc from driver probe (remoteproc_core.c:2311),
+and probe runs inside do_initcalls() (init/main.c:1490), which
+kernel_init_freeable() reaches before run_init_process("/init") (init/main.c:1619)
+- the request would be issued while the rootfs is still the unpacked ramdisk and
+nothing under /vendor is mounted yet. The image it names is not in /vendor/firmware
+either: 58 regular files sit directly under it in out/re/tree_vendor.tsv and the
+only two .mdt on the whole partition are CAMERA_ICP.mdt and gen6_3_26_0_zap.mdt,
+so adsp.mdt is not there at probe time or afterwards. It arrives with the two
+fstab.default:55-56 lines that mount by-name/modem on /vendor/firmware_mnt and
+by-name/dsp on /vendor/dsp, both plain late-fs `wait,slotselect` entries and both
+behind the boot-device path first-stage never resolves; ueventd.rc:69 then names
+/vendor/firmware_mnt/image/ as the directory the firmware loader should read. A
+probe-time boot therefore cannot succeed, and it is not free of noise: it logs a
+failed load on the one console we have on a first boot. It is at least not a
+stall - rproc_trigger_auto_boot() uses request_firmware_nowait(FW_ACTION_UEVENT)
+(remoteproc_core.c:1693), whose own comment says "so we can be built-in kernel
+code, without hanging the boot process" - so the argument for false is that the
+ROM already issues the one request that can succeed, from
+init.qti.kernel.target.rc:10 at `on early-boot`, once late-fs has mounted the
+images and ueventd is serving firmware_directories. That write goes to
+/sys/kernel/boot_adsp/boot and lands in rproc_boot(), which is what the compat
+driver is there to receive. Dropping the doomed attempt also loses nothing to
+clean up: a failing rproc_boot() decrements the power ref it took (the
+atomic_inc_return at :1930 unwound at :1954-1956), so the rproc is left exactly
+as unbooted as it was.
+
+WPSS keeps ROCKNIX's auto_boot = true. wpss.mdt is not on the vendor partition
+either, so its probe-time request fails the same way - the difference is who
+could boot it later. The ROM's only WPSS trigger is `write
+/sys/kernel/icnss/wpss_boot 1` (init.vendor.wlan.rc:9, at `on early-boot`), and
+that path belongs to icnss2.ko (vendor_dlkm /lib/modules/icnss2.ko, 460856
+bytes, /vendor/lib/modules/ at runtime), which has no way to load under our
+CONFIG_MODULES=n. Keeping the inherited value states the attempt rather than
+quietly dropping it; Wi-Fi coming up is a separate question from booting.
+
 --- a/drivers/remoteproc/qcom_q6v5_pas.c
 +++ b/drivers/remoteproc/qcom_q6v5_pas.c
 @@ -1530,6 +1530,40 @@
@@ -17,7 +53,7 @@ surrounding context is taken from the real 7.1.2 file.
 +	.firmware_name = "adsp.mdt",
 +	.pas_id = 1,
 +	.minidump_id = 5,
-+	.auto_boot = true,
++	.auto_boot = false,
 +	.proxy_pd_names = (char*[]){
 +		"lcx",
 +		"lmx",
