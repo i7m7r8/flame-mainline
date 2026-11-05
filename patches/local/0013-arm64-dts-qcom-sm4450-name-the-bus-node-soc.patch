@@ -1,0 +1,53 @@
+From: i7m7r8 <i7m7r8@users.noreply.github.com>
+Subject: [PATCH] arm64: dts: qcom: sm4450: name the bus node soc, not soc@0
+
+of_device_make_bus_id() (drivers/of/device.c) names a platform device from the
+node's first reg value, and only when the node has no reg does it fall back to
+kbasename(full_name), which keeps the unit address.  The SM4450 bus node has
+ranges and #address-cells but no reg of its own, so upstream's "soc@0" makes
+the device - and every sysfs path below it - read
+
+	/sys/devices/platform/soc@0/1d84000.ufshc
+
+Android cannot be retargeted away from that.  First stage builds
+/dev/block/by-name/* itself: DeviceHandler takes each partition's sysfs path,
+strips "/devices/platform/" and keeps only what matches an entry of
+androidboot.boot_devices, so the two spellings have to agree character for
+character.  Verified in QEMU with the ROM's own /init and a GPT disk carrying
+the PARTNAMEs this fstab asks for (harness in this repo's docs, kernel and
+initrd from the CI artifact, only the DT and the bootargs changing):
+
+  soc     + boot_devices=soc/<dev>       mounts /metadata and /system
+  soc     + boot_devices=<dev>           partition(s) not found after polling
+                                          timeout: system, vendor, metadata
+  soc@0   + boot_devices=soc/<dev>        same failure, and it is the one the
+                                          phone sees: "Failed to mount required
+                                          partitions early ..."
+  soc@0   + boot_devices=soc@0/<dev>      mounts
+
+So the bootargs alone could be bent to fit soc@0, and that is what
+dts/sm4450-xiaomi-flame.dts now says; but second stage and the vendor HALs
+have their own copy of the path and cannot be bent at all.  The ROM's
+vendor_ueventd.rc, init.target.rc, vendor.qti.smp2p.rc and
+init.qcom.early_boot.sh all spell /sys/devices/platform/soc/..., as does
+fstab.default's sysfs_path= on the /data line.  Renaming the node once makes
+every one of those paths real; leaving it named soc@0 would leave the port
+fixed only as far as the cmdline can reach.
+
+Upstream keeps the unit address because it is harmless to a Linux userspace
+that reads the DT for paths; it is the Android vendor userspace that hardcodes
+them.  Drop the address, keep the label, so &soc references in the board DTS
+are untouched.
+
+---
+--- a/arch/arm64/boot/dts/qcom/sm4450.dtsi
++++ b/arch/arm64/boot/dts/qcom/sm4450.dtsi
+@@ -393,7 +393,7 @@
+ 		};
+ 	};
+ 
+-	soc: soc@0 {
++	soc: soc {
+ 		#address-cells = <2>;
+ 		#size-cells = <2>;
+ 		ranges = <0 0 0 0 0x10 0>;

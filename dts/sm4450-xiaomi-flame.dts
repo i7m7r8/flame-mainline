@@ -223,8 +223,20 @@
 		 *     - then /first_stage_ramdisk/system/etc/fstab.<ro.boot.fstab_suffix>.
 		 *   - androidboot.boot_devices names the UFS host whose by-name
 		 *     directory the fstab mounts from
-		 *     (/dev/block/bootdevice/by-name/userdata and the rest), and
-		 *     1d84000.ufshc is that host's node here.
+		 *     (/dev/block/bootdevice/by-name/userdata and the rest).  It is
+		 *     compared as a *sysfs path prefix*, not as a node name:
+		 *     DeviceHandler strips "/devices/platform/" off each block
+		 *     device's realpath and symlinks only what starts with one of
+		 *     these tokens, so the value must be "soc/1d84000.ufshc" - the
+		 *     host sits under the bus node.  Measured, not reasoned: in QEMU
+		 *     with this /init, this fstab and a GPT disk carrying these
+		 *     PARTNAMEs, "soc/<dev>" mounts /metadata and /system, while the
+		 *     bare "<dev>" reaches "partition(s) not found after polling
+		 *     timeout: metadata, system, vendor".  The bus node is renamed
+		 *     from soc@0 to soc by patches/local/0013 so that this path and
+		 *     the /sys/devices/platform/soc/... the ROM spells in its
+		 *     vendor_ueventd.rc, init.target.rc and fstab sysfs_path= are
+		 *     one and the same path.
 		 * Stock does not put either token in its cmdline: the vendor_boot
 		 * blob at 0x1314000 holds exactly six newline-separated androidboot
 		 * tags and neither of these is among them, so on stock ABL injects
@@ -244,7 +256,7 @@
 		 * passes FW_OPT_NOFALLBACK_SYSFS and so ignores the ROM's own
 		 * force_sysfs_fallback 1 (see the zap-shader node). The same path
 		 * also serves remoteproc firmware to the ADSP loader. */
-		bootargs = "console=tty0 console=ttyMSM0,115200n8 loglevel=7 log_buf_len=4M fbcon=map:0 kpti=0 swiotlb=noforce cgroup.memory=nokmem,nosocket transparent_hugepage=never loop.max_part=7 rcupdate.rcu_expedited=1 clk_ignore_unused pd_ignore_unused androidboot.hardware=qcom androidboot.memcg=1 androidboot.serialconsole=0 androidboot.usbcontroller=a600000.dwc3 androidboot.load_modules_parallel=true androidboot.vendor.qspa=true androidboot.bootdevice=1d84000.ufshc androidboot.boot_devices=1d84000.ufshc androidboot.fstab_suffix=default qcom_ice.use_wrapped_keys=1 firmware_class.path=/vendor/firmware pstore_blk.best_effort=1 pstore.kmsg_bytes=262144 initcall_debug";
+		bootargs = "console=tty0 console=ttyMSM0,115200n8 loglevel=7 log_buf_len=4M fbcon=map:0 kpti=0 swiotlb=noforce cgroup.memory=nokmem,nosocket transparent_hugepage=never loop.max_part=7 rcupdate.rcu_expedited=1 clk_ignore_unused pd_ignore_unused androidboot.hardware=qcom androidboot.memcg=1 androidboot.serialconsole=0 androidboot.usbcontroller=a600000.dwc3 androidboot.load_modules_parallel=true androidboot.vendor.qspa=true androidboot.bootdevice=1d84000.ufshc androidboot.boot_devices=soc/1d84000.ufshc androidboot.fstab_suffix=default qcom_ice.use_wrapped_keys=1 firmware_class.path=/vendor/firmware pstore_blk.best_effort=1 pstore.kmsg_bytes=262144 initcall_debug";
 		stdout-path = "serial0:115200n8";
 
 		framebuffer: framebuffer@b8000000 {
