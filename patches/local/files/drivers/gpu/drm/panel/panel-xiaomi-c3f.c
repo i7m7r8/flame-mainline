@@ -76,16 +76,33 @@ static int c3f_update_status(struct backlight_device *bd)
 
 	/*
 	 * Vendor floors the level at bl-min-level rather than passing 0 down:
-	 * below it this panel stops responding instead of dimming. The scale is
-	 * not inverted even though the vendor DT carries
-	 * qcom,mdss-dsi-bl-inverted-dbv - the panel's own on-command writes
-	 * 0x51 0xc8 (and 0x51 0xff on the other c3f variants) before display-on,
-	 * and a high DBV there can only mean bright.
+	 * below it this panel stops responding instead of dimming.
+	 *
+	 * The level goes out MSB-first. mipi_dsi_dcs_set_display_brightness()
+	 * sends the two bytes LSB-first and is deprecated for 16-bit values
+	 * (drm_mipi_dsi.c:1444, :1452); this panel's domain is 0..4095, so that
+	 * helper would put level 1024 on the wire as 00 04 - which the driver IC
+	 * reads as DBV 4, near black - and level 7 as 07 00, which it reads as
+	 * 1792. Every 7.1.2 panel with a 4095 domain uses the _large variant
+	 * (panel-himax-hx83102.c:1066, panel-novatek-nt36523.c:1112).
+	 *
+	 * Whether the scale is *also* inverted is unresolved and deliberately not
+	 * guessed. The vendor DT carries qcom,mdss-dsi-bl-inverted-dbv, and an
+	 * earlier note here justified ignoring it on the strength of a 0x51 0xc8
+	 * write in the panel's on-command stream; that justification was wrong.
+	 * In out/dtbs/flame.dts the run that opens with 39 ... ff 23 and
+	 * 39 ... fb 01 - DSI long writes to vendor page registers 0xFF and 0xFB -
+	 * is followed by ascending offsets 0x10, 0x11 ...; those 0x50/0x51/0x52
+	 * bytes are registers inside that page, not DCS commands, so they say
+	 * nothing about DBV polarity. Inverting is a one-line change here, and the
+	 * device decides it: drag brightness from min to max and the panel must get
+	 * monotonically brighter. If it gets monotonically dimmer, this is the line
+	 * to invert on, and the floor has to move to max - level accordingly.
 	 */
 	level = clamp(level, (unsigned int)C3F_BL_MIN_LEVEL,
 		      (unsigned int)C3F_BL_MAX_LEVEL);
 
-	ret = mipi_dsi_dcs_set_display_brightness(ctx->dsi, level);
+	ret = mipi_dsi_dcs_set_display_brightness_large(ctx->dsi, level);
 	if (ret < 0)
 		dev_err(&ctx->dsi->dev, "backlight level %u failed: %d\n",
 			level, ret);
@@ -102,6 +119,7 @@ static int c3f_prepare(struct drm_panel *panel)
 {
 	struct c3f *ctx = panel_to_c3f(panel);
 	struct mipi_dsi_device *dsi = ctx->dsi;
+	unsigned int level;
 	int ret;
 
 	ret = regulator_bulk_enable(ARRAY_SIZE(ctx->supplies), ctx->supplies);
@@ -125,7 +143,15 @@ static int c3f_prepare(struct drm_panel *panel)
 
 	c3f_send_cmds(dsi, c3f_init_cmds, C3F_INIT_CMDS_COUNT);
 
-	ret = mipi_dsi_dcs_set_display_brightness(dsi, C3F_BL_MAX_LEVEL);
+	/*
+	 * Bring the panel up at the level the compositor last asked for, not at
+	 * max: props.brightness is initialised to C3F_BL_MAX_LEVEL at probe, so the
+	 * first power-on is still full bright, but every screen-on after that stops
+	 * flashing at 100% before the atomic commit catches up.
+	 */
+	level = clamp_t(unsigned int, ctx->bl->props.brightness,
+			C3F_BL_MIN_LEVEL, C3F_BL_MAX_LEVEL);
+	ret = mipi_dsi_dcs_set_display_brightness_large(dsi, level);
 	if (ret < 0)
 		dev_err(&dsi->dev, "failed to set backlight: %d\n", ret);
 
