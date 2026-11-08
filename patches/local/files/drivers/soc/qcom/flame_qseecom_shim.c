@@ -61,17 +61,29 @@ struct flame_qsee_send {
 #define FLAME_QSEE_APP_LOAD	_IOWR(FLAME_QSEE_IOC_MAGIC, 1, struct flame_qsee_load)
 #define FLAME_QSEE_SEND_CMD	_IOWR(FLAME_QSEE_IOC_MAGIC, 3, struct flame_qsee_send)
 
-struct flame_qsee {
-	struct device *dev;
-	struct miscdevice mdev;
-	struct qcom_tzmem_pool *pool;
-	/* one app id and one command at a time: the TA is stateful */
-	struct mutex lock;
+/*
+ * The app id lives on the open file, not in the ioctl argument: the library
+ * never reads anything back out of the APP_LOAD struct (checked at
+ * __QSEECom_get_handle+0xb3dc..0xb454 - after the ioctl it only touches its
+ * own handle and the fd), and SEND_CMD carries no id at all, so the vendor
+ * driver must keep one app per open file. Mirror that.
+ */
+struct flame_qsee_file {
+	struct flame_qsee *q;
 	u32 app_id;
 	bool loaded;
 };
 
-static long flame_qsee_app_load(struct flame_qsee *q, void __user *uarg)
+struct flame_qsee {
+	struct device *dev;
+	struct miscdevice mdev;
+	struct qcom_tzmem_pool *pool;
+	/* the SCM calls are serialised anyway; keep one command in flight */
+	struct mutex lock;
+};
+
+static long flame_qsee_app_load(struct flame_qsee *q,
+				struct flame_qsee_file *f, void __user *uarg)
 {
 	struct flame_qsee_load load;
 	char *name;
@@ -91,10 +103,10 @@ static long flame_qsee_app_load(struct flame_qsee *q, void __user *uarg)
 	}
 
 	mutex_lock(&q->lock);
-	ret = qcom_scm_qseecom_app_get_id(name, &q->app_id);
+	ret = qcom_scm_qseecom_app_get_id(name, &f->app_id);
 	if (!ret) {
-		q->loaded = true;
-		dev_info(q->dev, "app %s -> id %#x\n", name, q->app_id);
+		f->loaded = true;
+		dev_info(q->dev, "app %s -> id %#x\n", name, f->app_id);
 	} else {
 		dev_warn(q->dev, "app %s lookup failed: %d\n", name, ret);
 	}
@@ -104,7 +116,8 @@ static long flame_qsee_app_load(struct flame_qsee *q, void __user *uarg)
 	return ret;
 }
 
-static long flame_qsee_send_cmd(struct flame_qsee *q, void __user *uarg)
+static long flame_qsee_send_cmd(struct flame_qsee *q,
+				struct flame_qsee_file *f, void __user *uarg)
 {
 	struct flame_qsee_send send;
 	void *req = NULL, *rsp = NULL;
@@ -117,7 +130,7 @@ static long flame_qsee_send_cmd(struct flame_qsee *q, void __user *uarg)
 		return -EINVAL;
 
 	mutex_lock(&q->lock);
-	if (!q->loaded) {
+	if (!f->loaded) {
 		mutex_unlock(&q->lock);
 		return -ENODEV;
 	}
@@ -134,7 +147,7 @@ static long flame_qsee_send_cmd(struct flame_qsee *q, void __user *uarg)
 	}
 	memset(rsp, 0, send.rsp_len);
 
-	ret = qcom_scm_qseecom_app_send(q->app_id, req, send.req_len,
+	ret = qcom_scm_qseecom_app_send(f->app_id, req, send.req_len,
 					rsp, send.rsp_len);
 	if (!ret && copy_to_user(send.rsp, rsp, send.rsp_len))
 		ret = -EFAULT;
@@ -147,25 +160,47 @@ out:
 	return ret;
 }
 
-static long flame_qsee_ioctl(struct file *f, unsigned int cmd, unsigned long arg)
+static int flame_qsee_open(struct inode *inode, struct file *file)
 {
-	struct flame_qsee *q = container_of(f->private_data,
+	struct flame_qsee *q = container_of(file->private_data,
 					    struct flame_qsee, mdev);
+	struct flame_qsee_file *f;
+
+	f = kzalloc(sizeof(*f), GFP_KERNEL);
+	if (!f)
+		return -ENOMEM;
+	f->q = q;
+	file->private_data = f;
+	return 0;
+}
+
+static int flame_qsee_release(struct inode *inode, struct file *file)
+{
+	kfree(file->private_data);
+	return 0;
+}
+
+static long flame_qsee_ioctl(struct file *file, unsigned int cmd,
+			     unsigned long arg)
+{
+	struct flame_qsee_file *f = file->private_data;
 
 	switch (cmd) {
 	case FLAME_QSEE_APP_LOAD:
-		return flame_qsee_app_load(q, (void __user *)arg);
+		return flame_qsee_app_load(f->q, f, (void __user *)arg);
 	case FLAME_QSEE_SEND_CMD:
-		return flame_qsee_send_cmd(q, (void __user *)arg);
+		return flame_qsee_send_cmd(f->q, f, (void __user *)arg);
 	default:
 		/* The vendor driver prints "Invalid IOCTL: 0x%x" here. */
-		dev_dbg(q->dev, "unsupported ioctl %#x\n", cmd);
+		dev_dbg(f->q->dev, "unsupported ioctl %#x\n", cmd);
 		return -ENOTTY;
 	}
 }
 
 static const struct file_operations flame_qsee_fops = {
 	.owner		= THIS_MODULE,
+	.open		= flame_qsee_open,
+	.release	= flame_qsee_release,
 	.unlocked_ioctl	= flame_qsee_ioctl,
 	.compat_ioctl	= flame_qsee_ioctl,
 };
