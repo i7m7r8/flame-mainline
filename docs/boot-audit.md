@@ -130,7 +130,30 @@ allocator cannot get a single buffer on a mainline kernel, so SurfaceFlinger
 cannot start even though `msm` + `fbcon` can drive the panel as a console.
 Same class as B-1: a port, not a config byte.
 
-### DEGRADED - writes that will simply fail, verified harmless
+#### Firmware images: both chains now end at a real file
+
+The previous audit could not answer whether the ADSP image exists, because the
+phone's `/vendor/firmware_mnt` is not visible from this namespace. It is
+answerable from the OTA instead: `fstab.default:55` mounts partition `modem` at
+`/vendor/firmware_mnt`, and that partition, extracted from
+`stock/payload.bin`, is FAT16 with one `image/` directory (339 entries)
+containing:
+
+| file | size | what asks for it |
+| --- | --- | --- |
+| `adsp.mdt` + `adsp.b00`..`adsp.b41` | 7164 B + ~19 MB | patch 0003's `adsp.mdt`, via `boot_adsp` -> `rproc_boot` |
+| `adspr.jsn`, `adsps.jsn`, `adspua.jsn` | 513 / 515 / 703 B | ADSP sensor PD configuration |
+| `adrastea/wpss.mdt` + `wpss.b00`..`wpss.b10` | 4684 B + ~7 MB | the board file's `adrastea/wpss.mdt` |
+| `adrastea/bdwlan*` | 240 files | WCN6750 board data (unused without `icnss2`) |
+| `clarence/qdsp6m.qdb` | 6.75 MB | modem DSP calibration (no modem rproc here) |
+| `mfido.mdt`, `mkeybag.mdt`, `secauth.mdt`, `soter64.mdt`, `widevine.mbn`, `tuiauthapp.mbn` | 4-266 KB | QSEE trustlets, i.e. the TA half of B-1 |
+
+So the ADSP and WPSS firmware names are correct *and* present, and the only
+reason a DSP stays down would be the driver side. Note also that the modem
+partition is where the KeyMint/KM trustlets live: B-1 needs a kernel driver, not
+firmware that is missing.
+
+## DEGRADED - writes that will simply fail, verified harmless
 
 Every one of these is a `write` in an rc action or by a HAL; AOSP's
 `Action::ExecuteCommand` logs the failure and continues with the rest of the
