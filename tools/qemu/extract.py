@@ -17,6 +17,10 @@ from payload_extract import lz4_frame_decompress
 import patch_init_module_fatal as P
 
 SRC = os.environ.get("FLAME_ARTIFACT", "out/flame-mainline-final.img")
+# run.sh's usage line passes the unpacked artifact *directory*; read_boot wants
+# the image itself. Accept both, so the documented invocation works.
+if os.path.isdir(SRC):
+    SRC = os.path.join(SRC, "flame-mainline-final.img")
 kern, ram, osv, cmdline = read_boot(SRC)
 cpio = lz4_frame_decompress(ram)
 print(f"ramdisk section {len(ram)} B -> cpio {len(cpio)} B")
