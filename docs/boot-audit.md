@@ -68,6 +68,56 @@ androidboot.load_modules_parallel=true   androidboot.vendor.qspa=true
 `a600000.dwc3` is not ours to choose, and our USB node produced
 `a600000.usb`; see finding **F-1**.
 
+## The boot path, step by step, with what is verified at each step
+
+| # | what happens | state |
+| --- | --- | --- |
+| 1 | ABL parses our `boot.img`: v4, no cmdline, no addresses - those come from `vendor_boot` | verified: header fields equal stock's |
+| 2 | the EL1 shim hands over our dtb; `/chosen/bootargs` (655 B) plus ABL's `androidboot.*` from `vendor_boot`'s 181-byte bootconfig become the cmdline | verified: both strings read back |
+| 3 | kernel brings up UFS (`1d84000.ufshc` under `soc`), ICE, RPMh, GENI console, panel | verified: nodes and config; **panel lighting up is unmeasured** |
+| 4 | first stage `/init` (patched so a failed module load is not fatal) mounts `/system`, `/vendor` from `super` via `dm-linear` (in `dm-mod`), then `/metadata` | verified: `dm-linear` is in `dm-mod`, F2FS/EXT4 `=y`; QEMU first stage reaches "MOUNTS" |
+| 5 | `ueventd` creates `/dev/block/by-name/*` and serves `firmware_directories /vendor/firmware_mnt/image/` | verified: rc contents; `boot_devices=soc/1d84000.ufshc` matches the node |
+| 6 | second stage init runs rc; every vendor-only sysfs write fails and is logged, not fatal | verified: 123 distinct targets, providers mapped |
+| 7 | `write /sys/kernel/boot_adsp/boot 1` -> our compat node -> `system_wq` -> `rproc_boot` -> `request_firmware` (UEVENT) -> sysfs fallback (`force_sysfs_fallback=1` from `vendor_boot`) -> ueventd -> `adsp.mdt` | verified end to end, **file exists** |
+| 8 | USB: `dwc3@a600000` -> UDC `a600000.dwc3` -> ROM's configfs composition | UDC name verified; **composition risk**: `/vendor/bin/init.qcom.usb.sh` defaults include `diag`, which has no mainline function driver |
+| 9 | vold unlocks `/data` (`wrappedkey_v0`) through KeyMint | **BLOCKED** - `/dev/qseecom` (B-1) |
+| 10 | SurfaceFlinger allocates buffers through gralloc | **BLOCKED** - `/dev/qti-smmu-proxy` (B-2) |
+
+Steps 1-7 are the whole of "does the kernel boot and does first stage get
+through". Steps 8-10 are where the ROM's own userspace meets kernel interfaces
+this port does not have.
+
+## Every module, fingerprinted
+
+All 288 `.ko` in the vendor ramdisk (and the 70 that only exist in
+`vendor_dlkm`) went through `craft-anything-cli` triage and string extraction,
+and their undefined-symbol lists were bucketed by subsystem. Of the 288:
+
+| imports | modules |
+| --- | --- |
+| clock framework | 53 |
+| DMA engine | 42 |
+| regmap | 38 |
+| regulator | 30 |
+| `qcom_scm` | 29 |
+| thermal | 21 |
+| GENI/interconnect | 20 |
+| pinctrl/gpio | 19 |
+| USB gadget | 14 |
+| smp2p/smem | 14 |
+| glink/rpmsg | 12 |
+| `request_firmware` | 12 |
+| iommu | 7 |
+| rpmh | 7 |
+| remoteproc | 6 |
+| ufs | 5 |
+| spmi | 5 |
+
+The point of the bucket counts is not the numbers, it is that **none of these
+288 can be loaded** (`CONFIG_MODULES=n`), so any interface that only one of
+them provides is absent from this image unless an in-tree driver covers it -
+which is exactly the DEGRADED table below.
+
 ## Findings
 
 ### Fixed in this audit (committed, both built green)
@@ -132,7 +182,7 @@ allocator cannot get a single buffer on a mainline kernel, so SurfaceFlinger
 cannot start even though `msm` + `fbcon` can drive the panel as a console.
 Same class as B-1: a port, not a config byte.
 
-#### Firmware images: both chains now end at a real file
+### Firmware images: both chains now end at a real file
 
 The previous audit could not answer whether the ADSP image exists, because the
 phone's `/vendor/firmware_mnt` is not visible from this namespace. It is
@@ -179,7 +229,7 @@ corpus (288 + 70 blobs scanned).
 | `/proc/sys/kernel/sched_lib_{name,mask_check,mask_force}` | vendor scheduler (`libqti-perfd.so` writes them) | absent - perf HAL degraded |
 | `/sys/devices/virtual/graphics/fb0/idle_time` | vendor fbdev | `fb0` exists via DRM fbdev emulation; the attribute is vendor-only |
 
-#### Userspace to kernel contract, read off the vendor binaries
+### Userspace to kernel contract, read off the vendor binaries
 
 Every one of these is a string in a binary that runs before or alongside
 `system_server` (extracted from `vendor.img` with `debugfs`, scanned with
