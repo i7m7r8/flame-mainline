@@ -331,17 +331,15 @@ run was started for this audit.
 2. Whether the TrustZone on this device exposes the wrapped-key SCM calls
    (`qcom_scm_has_wrapped_key_support()`), which decides whether HWKM is even
    reachable if B-1 were ported.
-3. Whether `PARTLABEL=oops` (`config/flame.fragment:391`) is a real partition.
-   The comment there says it is assumed. Everything the ROM and the stock
-   kernel do say logs somewhere else: `vendor_boot`'s cmdline carries
-   `mtdoops.fingerprint=`, the module set ships `block2mtd`, `mtd`, `mtdblock`
-   and `mtdoops`, and the only log-ish partition the rc files name is
-   `by-name/logfs` (besides `ramdump`, `rawdump`, `spunvm`, `rescue`). So the
-   stock mechanism looks like mtdoops-over-block2mtd on `logfs`, not pstore_blk
-   on `oops`. If that is right, our backend stays unregistered and we get no
-   post-mortem log at all; the fix is a one-line `PARTLABEL=` change once the
-   real partition table has been read on device. Cost of being wrong today:
-   logs, not boot.
+3. ~~Whether `PARTLABEL=oops` (`config/flame.fragment:391`) is a real
+   partition.~~ **Answered on 2026-11-08: it is.** The fastboot ROM's flash map
+   (`images/rawprogram0.xml`) lists `label="oops"` with
+   `num_partition_sectors="4096"` and `SECTOR_SIZE_IN_BYTES="4096"`, i.e. a
+   dedicated 16 MiB partition, and `label="logfs"` separately (2048 sectors,
+   8 MiB) in `rawprogram4_WIPE_PARTITIONS.xml`. The earlier guess that stock
+   used mtdoops on `logfs` was wrong on the partition, right on the mechanism:
+   the vendor cmdline does carry `mtdoops.fingerprint=`, but `oops` exists for
+   pstore. Cost of the config being right or wrong: logs, not boot.
 4. Whether the panel timings inherited for the c3f panel actually produce a
    picture - the DTS says they were inherited from sky and must be replaced
    with the vendor fragment's timings.

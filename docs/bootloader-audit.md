@@ -8,19 +8,120 @@ accept the `boot.img` this repository builds.
 
 ## Where the binaries came from
 
-There is no `*.tgz` fastboot package in this workspace (checked `/root`, `/tmp`,
-`/data/media`; the only tarballs are toolchains). The fastboot package and this
-device's OTA carry **the same partition images**, and `stock/payload.bin` is the
-signed OTA for exactly this build, so the bootloader set was extracted from it:
+The fastboot ROM is now available and was used directly:
 
 ```
-abl xbl xbl_config tz hyp devcfg aop aop_config qupfw uefisecapp
-imagefv shrm cpucp xbl_ramdump
+/storage/emulated/0/Download/ABDM/flame_in_global_images_OS3.0.303.0.WGUINXM_20261010.0000.00_16.0_in_a8222f7a67.tgz
+6 559 454 050 B   gzip -dc | wc -c = 8 866 978 840 B, exit 0
 ```
 
-all with `tools/payload_extract.py`. If a `.tgz` is supplied later, its
-`images/` directory contains these same files byte for byte minus the OTA
-container, and everything below applies unchanged.
+There is a second copy of the same name under `.../ABDM/Compressed/`, same
+size, and it is **corrupt**: `gzip` stops with `invalid compressed data--format
+violated` after 469 008 384 bytes, so only the first 44 members (through
+`userdata.img`) are recoverable from it. Before the intact path was known, that
+prefix was still useful - it holds `uefi.elf`, `tools.fv`, the GPT binaries,
+all `rawprogram*.xml`/`patch*.xml`, `devcfg.mbn` and the full
+`vendor_boot.img` - and a tolerant tar walker was written to get them out. The
+rule that matters: **check the archive before trusting a member count from it.**
+
+From the intact file, extracted with `tar xzf ... --wildcards '*/images/abl.elf'`
+and friends:
+
+```
+abl.elf 241464   aop.mbn 232416   cpucp.elf 113632   devcfg.mbn 44904
+shrm.elf 60144   tz.mbn 3748032   xbl_config.elf 196744   imagefv.elf 1056568
+featenabler.mbn 101344   multi_image.mbn 32768
+boot.img 100663296   dtbo.img 24117248   vendor_boot.img 100663296
+```
+
+plus, from the recovered prefix, `uefi.elf` (4 661 048 B), `tools.fv`,
+`qupv3fw.elf`, `apdp.mbn`, `rtice.mbn`, `rescue.img`, `gpt_main1.bin`,
+`gpt_backup5.bin`, `gpt_both1.bin`, `rawprogram{0,1,2,3,5}.xml`,
+`rawprogram4_WIPE_PARTITIONS.xml`, `patch{0,1,4}.xml`, `flash_all*.sh`,
+`anti_version.txt`, `crclist.txt`, and a 178 MB `vmlinux-selfbuild`.
+
+Note `xbl.elf`, `hyp.mbn`, `xbl_ramdump.elf` and `keymaster.mbn` are not present
+under those names in this ROM - `tar` reported `Not found in archive` for them.
+
+## The partition table, measured
+
+`SECTOR_SIZE_IN_BYTES="4096"` throughout, and the sizes are exact:
+
+| partition | sectors | size | where |
+| --- | --- | --- | --- |
+| `boot_a`, `boot_b` | 24576 | **96 MiB** | LUN4 |
+| `vendor_boot_a`, `vendor_boot_b` | 24576 | 96 MiB | LUN4 |
+| `logfs` | 2048 | 8 MiB | LUN4 |
+| `oops` | 4096 | **16 MiB** | LUN0 |
+| `metadata` | 4096 | 16 MiB | LUN0 |
+| `super` | 1886208 | 7.72 GB | LUN0 |
+| `userdata` | rest | grows | LUN0 |
+
+`gpt_main1.bin` is the LUN1 table and holds `xbl_a`, `xbl_config_a`,
+`multiimgqti_a`, `multiimgoem_a`, `apdp`; its header sits at a 4096-byte LBA, which
+is how the sector size was confirmed twice.
+
+## The stock kernel's own configuration
+
+`vmlinux-selfbuild` is a real, symbol-bearing build:
+`Linux version 6.6.118-android15-8-ge56cf6b09cca-ab15511674-4k (kleaf@build-host)`,
+ELF64 arm64, 178 114 144 B, with an uncompressed-friendly **IKCONFIG block at
+0x115fea8** (`IKCFG_ST` ... `IKCFG_ED` around a gzip stream). Decompressing it
+gives 211 851 bytes of `.config`, 2 252 `CONFIG_` lines - the stock kernel's
+configuration for this exact phone, which had only ever been modelled from
+`stock/gki.config` before.
+
+Diffed against the config this port builds (453 options stock has `=y` that we
+do not, 282 of which exist as symbols in our tree, plus 67 stock `=m`):
+
+* the one that blocks a boot is **`CONFIG_BOOT_CONFIG`** - see below;
+* `ARM64_VA_BITS`: stock **39**, ours 52 (`ARM64_LPA2=y`, `PA_BITS 52`). Not a
+  blocker: `arch/arm64/mm/proc.S:508-514` and the `ARM64_HAS_VA52` boot-CPU
+  feature in `cpufeature.c:3072` make the kernel fall back to 48-bit VA on
+  silicon without LPA2, it does not panic. Worth noting because it is a
+  deviation from the device's own configuration;
+* everything else in the gap is hardening (`FORTIFY_SOURCE`,
+  `HARDENED_USERCOPY`, `CFI_CLANG`, `INIT_ON_ALLOC_DEFAULT_ON`), debug
+  (`DEBUG_INFO_*`, `KASAN`), power (`CPU_IDLE_GOV_TEO`, `DAMON`), input
+  (`HID_*`), or module plumbing (`MODVERSIONS`) that `CONFIG_MODULES=n`
+  makes moot.
+
+### The one real boot blocker this ROM exposed: bootconfig
+
+```
+stock:  CONFIG_BOOT_CONFIG=y   CONFIG_CMDLINE="... bootconfig ..."
+ours:   nothing                CONFIG_CMDLINE=""
+```
+
+`init/main.c:437` runs `setup_boot_config()` only when `bootconfig_found` (the
+literal `bootconfig` token on the command line, matched at
+`init/main.c:404-411`) or `CONFIG_BOOT_CONFIG_FORCE` is set, and
+`lib/Makefile:267` builds `bootconfig.o` only under `CONFIG_BOOT_CONFIG`.
+With neither, the blob ABL appends is parsed by nobody and `/proc/cmdline`
+loses every key that travels in it - `androidboot.slot_suffix` first among
+them. The ROM's fstab rows are `slotselect`, so first stage then has no suffix
+to resolve `vendor`/`system`/`product` with.
+
+Both `vendor_boot` images on this phone carry that blob: 181 B on the Infinity
+OTA (`androidboot.hardware`, `memcg`, `usbcontroller`,
+`load_modules_parallel`, `vendor.qspa`), 153 B on HyperOS (the same list minus
+`serialconsole`). Fixed in `05a410c`: `CONFIG_BOOT_CONFIG=y` and
+`CONFIG_BOOT_CONFIG_FORCE=y`, the FORCE variant chosen so the no-blob case is
+an info line rather than the error a bare token would print.
+
+## Where each ROM keeps the generic ramdisk
+
+Not the same, and it matters when mixing images:
+
+| ROM | `boot.img` ramdisk | `vendor_boot` ramdisk table |
+| --- | --- | --- |
+| HyperOS OS3.0.303.0 (this fastboot ROM) | **0** | 2 entries: platform 13 056 316 B, `_boot` 2 478 170 B |
+| Infinity X Android 17 (OTA, on the phone) | 2 600 656 B | 1 entry, 16 134 011 B |
+
+So stock HyperOS keeps the generic ramdisk in `vendor_boot`, and Infinity X
+puts it back into `boot.img`. Our image follows Infinity X, which is the ROM
+that is installed - and since `vendor_boot` is never written by this port, the
+pairing stays consistent.
 
 ## Reverse engineering: what could be decoded, and what could not
 
@@ -126,7 +227,7 @@ disables enforcement.)
 | header_size | 1584 | 1584 | equal |
 | kernel_size / section offset | 36 456 960 @ 0x1000 | 84 992 000 @ 0x1000 | both page-aligned; ours larger |
 | ramdisk offset | page-aligned after kernel | `0x510f000`, page-aligned | equal rule |
-| image end vs boot partition | 0x2541000 | 0x55bf000 (89 878 528 B) | **fits** the 100 663 296 B partition with 10.7 MB spare |
+| image end vs boot partition | 0x2541000 (Infinity), kernel-only 96 MiB image (HyperOS) | 0x55bf000 (89 878 528 B) | **fits** the 96 MiB partition the flash map declares (24576 x 4096), 10.7 MB spare |
 | cmdline in header | empty | empty | v4: cmdline comes from `vendor_boot`, untouched |
 | kernel `Image` header | valid | `magic ARMd`, `text_offset 0`, `image_size 86 900 736`, `flags 0xa` | valid arm64 Image |
 | vbmeta hash of boot | listed | n/a | verification disabled (flags 0x3) |
@@ -140,12 +241,21 @@ encrypted blob and cannot be read. This is the single thing in the boot chain
 that a static audit cannot clear, and the way to clear it is one boot attempt,
 not another decode.
 
-## Is `abl.img` shipped from a fastboot package different?
+## Two ABLs, both encrypted
 
-No. The OTA and the fastboot package are built from the same Qualcomm BSP and
-carry the same signed `abl`. If the encrypted-payload conclusion is wrong
-somewhere, it would be visible as readable strings in `abl.img`; there are none
-beyond the ELF stub, and 7.99 bits/byte over a 233 KB segment is not text.
+The question "is the fastboot ROM's loader any more readable than the OTA's?"
+is answered by measurement, not by hope:
+
+| file | size | LOAD segment | entropy over it | sha256 |
+| --- | --- | --- | --- | --- |
+| OTA `abl.img` | 241 664 | 0x39000 @ 0x9fa00000 | **7.99** | `20e453c3ae…` |
+| fastboot `abl.elf` | 241 464 | 0x39000 @ 0x9fa00000 | **8.00** | `ef0673ba30…` |
+
+Different builds, identical structure, and 8.00 bits per byte over the only
+loadable segment: the payload is encrypted in both. Every other component in
+the ROM is ordinary code - `aop.mbn` 5.36, `tz.mbn` 4.84, `devcfg.mbn` 6.25,
+`imagefv.elf` 4.51, `xbl_config.elf` 3.25 - so it is ABL specifically, not the
+packaging, that is sealed.
 
 ## So: will it boot "without any single error"?
 
