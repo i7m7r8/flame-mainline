@@ -290,6 +290,32 @@ the ROM is ordinary code - `aop.mbn` 5.36, `tz.mbn` 4.84, `devcfg.mbn` 6.25,
 `imagefv.elf` 4.51, `xbl_config.elf` 3.25 - so it is ABL specifically, not the
 packaging, that is sealed.
 
+## The artifact is not bit-reproducible, and now it says why
+
+Building the same commit twice does not produce the same `Image`. Two runs
+were compared directly:
+
+```
+88b157c (run 42450676011)          50045bf (run 42454799295)
+Image 84 916 736 B                 Image 84 916 736 B
+                                   differing bytes: 9 396 898, first at 0x2afd8d
+flame.config   identical
+sm4450-xiaomi-flame.dtb  identical (3e140ca0...)
+```
+
+The cause is `ROCKNIX_REF`, which defaults to the moving branch `next`: each
+run clones whatever the SM4450 patch series is that day, so the Image differs
+even when nothing in this repository changed. The kernel tarball is pinned by
+`KERNEL_VERSION` and cached, and the local patches live in the repository, so
+the Rocknix series is the only moving input.
+
+Since `fb57583` the workflow writes the resolved commit to `rocknix-ref.txt`
+and puts it at the top of `patch-report.txt`, which ships inside the artifact -
+so an Image can always be traced back to the patch state that produced it.
+Pinning the default to a commit would make builds bit-reproducible; that is a
+policy decision (it freezes upstream fixes), not something this audit should
+change silently.
+
 ## So: will it boot "without any single error"?
 
 Two different questions hide in that sentence, and they have different answers.
