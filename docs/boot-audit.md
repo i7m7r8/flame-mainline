@@ -330,6 +330,15 @@ and the answer is worth not re-deriving.
   `_FALLBACK` `=y`; the DT wires `qcom,ice = <&ice_ufs_mem>` and the bootargs
   already carry `qcom_ice.use_wrapped_keys=1`, which `ice.c:179-186` requires
   before it will use HWKM at all.
+* **Reserved memory.** `vendor_boot` carries **eleven** base DTBs on this
+  device (Parrot, ParrotP, Ravelin, RavelinP, each in 4Gb/SG/plain). Our
+  `reserved-memory` was diffed against all of them by address, and against
+  `Ravelin 4Gb`, `Ravelin` and `RavelinP` it is **33 of 33 regions with
+  identical sizes**, with exactly two additions of our own: `handover@bc000000`
+  (the shim window, deliberately reserved *without* `no-map`) and
+  `ramoops@80d00000`. Against the Parrot variant only 21 of 23 sizes match,
+  which is the right answer - flame is Ravelin. So the carveouts are the
+  vendor's, not a guess.
 * **The rootfs side.** `F2FS_FS`, `EXT4_FS`, `SELINUX` (+`_DEVELOP`),
   `BINDERFS`, `CGROUPS`/`MEMCG`/`CPUSETS`/`BLK_CGROUP`, `ZRAM`, `PSI`,
   `FHANDLE`, `TMPFS_XATTR`, `DMABUF_HEAPS` are all `=y`.
