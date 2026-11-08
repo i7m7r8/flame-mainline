@@ -275,19 +275,35 @@ jobs:
             'adsp.mdt' 'wpss.mdt' \
             'qcom,adsp-loader' 'boot_adsp' \
             'default-key' 'inlinecrypt' 'qcom-ice' 'Using HWKM' \
-            'no support for wrapped keys'; do
+            'no support for wrapped keys' \
+            'Load bootconfig:' 'No bootconfig data provided'; do
             grep -qaF -- "$s" Image || {
               echo "Image is missing '$s': a contract with userspace, or a local patch that did not apply" >&2
               exit 1
             }
           done
           for s in \
-            'fastrpcglink-apps-dsp' 'qcom,sm4450' 'xiaomi,flame'; do
+            'fastrpcglink-apps-dsp' 'qcom,sm4450' 'xiaomi,flame' \
+            'androidboot.boot_devices=soc/1d84000.ufshc' \
+            'androidboot.usbcontroller=a600000.dwc3'; do
             grep -qaF -- "$s" sm4450-xiaomi-flame.dtb || {
               echo "dtb is missing '$s': flame's device tree lost a node" >&2
               exit 1
             }
           done
+          # The watchlist above is documentation unless something fails on it.
+          # These four are not features but boot behaviour - without
+          # BOOT_CONFIG the kernel never parses the blob ABL appends, and
+          # androidboot.slot_suffix never reaches init, which is a first-stage
+          # mount failure rather than a missing feature.
+          for o in CONFIG_BOOT_CONFIG CONFIG_BOOT_CONFIG_FORCE \
+                   CONFIG_ARM64_HANDOVER_CMDLINE CONFIG_BLK_DEV_INITRD; do
+            grep -qx "$o=y" flame.config || {
+              echo "flame.config lost $o: the boot handover contract depends on it" >&2
+              exit 1
+            }
+          done
+          echo "boot-config: ok"
           echo "image-strings: ok"
           dtc -I dtb -O dts sm4450-xiaomi-flame.dtb > sm4450-xiaomi-flame.cdt.dts 2>/dev/null
           ls -lh
