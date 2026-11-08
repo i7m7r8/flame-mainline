@@ -149,19 +149,33 @@ ROM's own binaries, not inferred:
   %d"*.
 * `libQSEEComAPI.so`: `"/dev/qseecom"`, *"Error::Failed to open /dev/qseecom
   device"*.
+* `qseecomd` (rc: `class core`, started `on init`) is the loader; the KeyMint
+  service itself is `class early_hal` (`vendor.keymint-qti`), and
+  `fstab.default:51` asks for `fileencryption=...:v2+inlinecrypt_optimized+
+  wrappedkey_v0` with `metadata_encryption=aes-256-xts:wrappedkey_v0`,
+  `keydirectory=/metadata/vold/metadata_encryption`.
 
-`libqtikeymint.so` is what
-`android.hardware.security.keymint-service-qti` loads, and `fstab.default:51`
-asks for `fileencryption=...:v2+inlinecrypt_optimized+wrappedkey_v0` with
-`metadata_encryption=aes-256-xts:wrappedkey_v0`, `keydirectory=/metadata/...`.
-No QSEE → no KeyMint → no unwrap → `/data` never mounts, and `keystore2` being
-critical is what drives the reboot-to-bootloader loop already documented in
-`docs/mainline-port.md`.
+No QSEE → no KeyMint → no unwrap → `/data` never mounts, and `keystore2`
+being critical is what drives the reboot-to-bootloader loop already documented.
+
+**What exists on the mainline side, measured.** `drivers/firmware/qcom/`
+already carries the transport:
+`qcom_scm_qseecom_app_get_id(app_name, &app_id)` and
+`qcom_scm_qseecom_app_send(app_id, req, req_size, rsp, rsp_size)` are exported
+(`qcom_scm.c:2231` and `:2283`), the second documenting that both buffers must
+be TZ memory, and `CONFIG_QCOM_TZMEM=y` provides that allocator.
+`drivers/firmware/qcom/qcom_qseecom.c` is a bus that creates per-app client
+devices from DT. What is missing is the *userspace-facing* chardev that maps
+`QSEECOM_IOCTL_*` onto those two calls - not the SMC layer. That materially
+changes the cost from "port 600 KB of vendor driver" to "write the ioctl
+layer", and the vendor blobs point the way: `qseecom_dlkm.ko` imports exactly
+`qcom_scm_qseecom_call`, while `smcinvoke_dlkm.ko` imports raw
+`qcom_scm_invoke_smc{,_legacy}` and would need the harder path.
 
 Cost, measured off the blobs: `qseecom_dlkm.ko` is 334 312 B with 1 566
-code ranges in the lifter's function list (83 named functions in the
-symbol table, 109 kernel imports); `smcinvoke_dlkm.ko` is 284 656 B with
-1 102 ranges (190 named, 103 imports); and `.modinfo depends=` on `qseecom_proxy`,
+code ranges in the lifter's function list (83 named functions in the symbol
+table, 109 kernel imports); `smcinvoke_dlkm.ko` is 284 656 B with 1 102 ranges
+(190 named, 103 imports); and `.modinfo depends=` on `qseecom_proxy`,
 `qcom-scm`, `mem_buf_dev` for the first. No firmware path literal appears in
 either blob (`qseecom_dlkm.ko` has no `/vendor/firmware`, no `.mbn`;
 `smcinvoke_dlkm.ko` imports `firmware_request_nowarn` but names no file), so
