@@ -111,8 +111,10 @@ No QSEE → no KeyMint → no unwrap → `/data` never mounts, and `keystore2` b
 critical is what drives the reboot-to-bootloader loop already documented in
 `docs/mainline-port.md`.
 
-Cost, measured off the blobs: `qseecom_dlkm.ko` 1566 functions,
-`smcinvoke_dlkm.ko` 1102, and `.modinfo depends=` on `qseecom_proxy`,
+Cost, measured off the blobs: `qseecom_dlkm.ko` is 334 312 B with 1 566
+code ranges in the lifter's function list (83 named functions in the
+symbol table, 109 kernel imports); `smcinvoke_dlkm.ko` is 284 656 B with
+1 102 ranges (190 named, 103 imports); and `.modinfo depends=` on `qseecom_proxy`,
 `qcom-scm`, `mem_buf_dev` for the first. No firmware path literal appears in
 either blob (`qseecom_dlkm.ko` has no `/vendor/firmware`, no `.mbn`;
 `smcinvoke_dlkm.ko` imports `firmware_request_nowarn` but names no file), so
