@@ -314,6 +314,35 @@ and the answer is worth not re-deriving.
   `PIL_INFO`, `FASTRPC`, `APR`, `PDR_HELPERS`, `SCM` are all `=y`; the firmware
   resolution chain itself is unchanged from the last audit.
 
+## The shipped ramdisk really is the ROM's, plus one instruction
+
+`flame-mainline-final.img` carries the Infinity ROM's own first-stage ramdisk,
+and the claim that only one instruction changed is testable without the phone.
+Extracting the ramdisk section from the v4 image and decoding it with a legacy
+LZ4 decoder gives a 4 893 696-byte cpio - **the same uncompressed size as the
+ROM's `stock/ramdisk.img`**, which decodes to the identical size. Extracting
+`/init` from both:
+
+```
+rd_stock/init   2763568 bytes
+rd_new/init     2763568 bytes
+cmp -l          2 differing bytes, both inside one instruction
+```
+
+and that instruction, at file offset 0x11b3f0:
+
+```
+stock: 11b3f0: 370000d5   tbnz  w21, #0, 0x11b408
+ours:  11b3f0: 14000006   b           0x11b408
+```
+
+`tbnz` -> `b`: the take-the-fatal-only-if branch becomes an unconditional skip,
+which is exactly what `tools/patch_init_module_fatal.py` promises - the
+`LOG(FATAL) << "Failed to load kernel modules"` path is bypassed because
+`CONFIG_MODULES=n` makes every entry in `modules.load` fail. Nothing else in
+the binary changed, and nothing else in the ramdisk changed: 12 files, 12
+directories, same sizes.
+
 ## Process finding
 
 `.github/workflows/kernel.yml:487` sets `retention-days: 1`. The artifacts for
