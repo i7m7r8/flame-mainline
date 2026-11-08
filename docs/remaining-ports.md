@@ -117,9 +117,16 @@ an early HAL is worse than one that fails cleanly with `ENOENT`.
 
 ### What is not measured
 
-1. The SDE ioctl set the ROM's composer actually issues - obtainable the same
-   way as the QSEECOM table: collect `ioctl(fd, cmd, arg)` sites from
-   `libsdedrm.so` and the composer service.
+1. ~~The SDE ioctl set.~~ **Partly measured.** `libsdedrm.so` issues no
+   `ioctl()` of its own; it reaches the kernel through libdrm
+   (`drmModeAtomicAddProperty`, `drmModeAtomicCommit`, `drmIoctl`,
+   `drmModeObjectGetProperties`), which means the contract is not a private
+   ioctl number but the **DRM property namespace**: the library carries **72
+   distinct `SDE_*` property names** (`SDE_DSPP_AD_V4_BACKLIGHT`,
+   `SDE_DEMURA_INIT_CFG_V1`, `SDE_VIG_3D_LUT_GAMUT_V5`, ...). Those are looked
+   up by name on DRM objects and fail if the driver does not expose them, so
+   the work is a property-ABI port, not a single ioctl shim. What is still
+   unmeasured is the private `DRM_COMMAND_BASE` ioctl set behind them.
 2. Whether the allocator can be satisfied by a plain dma-buf heap if a
    `/dev/qti-smmu-proxy`-compatible node were provided (the proxy is a
    dma-mapping indirection; a stub that forwards to the DMA API may be enough
