@@ -8,6 +8,7 @@ api.github.com request, and never written to disk or to a command line.
 
 		NCHUNK=8 tools/fetch_artifact.py <workflow-run-id> <out.zip>
 """
+import fcntl
 import http.client
 import json
 import os
@@ -96,9 +97,23 @@ def fetch(url, start, end, out, off):
     return got
 
 
+def take_lock(out):
+    """Two downloaders on one output path interleave their writes and produce a
+    file with holes that still reports the right length - that is how the first
+    corrupt copy of a 113 MB artifact was made. One writer at a time, and the
+    lock dies with the process."""
+    fd = os.open(out + ".lock", os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        sys.exit("another fetch is writing %s (lock held)" % out)
+    return fd
+
+
 def main():
     run = sys.argv[1]
     out = sys.argv[2]
+    lock_fd = take_lock(out)  # noqa: F841 - held until exit
     tok = token()
     arts = api(tok, "/repos/%s/actions/runs/%s/artifacts" % (REPO, run))["artifacts"]
     if not arts:
