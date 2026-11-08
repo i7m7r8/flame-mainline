@@ -811,6 +811,16 @@
 		qcom,rproc-handle = <&remoteproc_adsp>;
 	};
 
+	/* The mainline-backed /dev/qseecom (docs/remaining-ports.md, B-1). Disabled
+	 * on purpose: the driver compiles into the Image so it cannot rot, but
+	 * binding it before anyone has watched a boot would replace KeyMint's clean
+	 * ENOENT with a chardev that may block in an early HAL. Flip to "okay" for
+	 * a test build. */
+	qseecom_shim: qseecom-shim {
+		compatible = "flame,qseecom-shim";
+		status = "disabled";
+	};
+
 	remoteproc_adsp: remoteproc@3000000 {
 		compatible = "qcom,sm4450-adsp-pas";
 		reg = <0x0 0x03000000 0x0 0x10000>;

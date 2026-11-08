@@ -306,6 +306,15 @@ CONFIG_QCOM_Q6V5_WCSS=y
 # The vendor sysfs the ROM's init waits on with no timeout; =y because there is
 # no module channel and the wait happens before any late_start could load one.
 CONFIG_QCOM_ADSP_LOADER_COMPAT=y
+
+# The other vendor sysfs contract that is a chardev instead: /dev/qseecom, the
+# node KeyMint opens (docs/remaining-ports.md, B-1). Compiled so CI keeps it
+# honest, but its board DTS node is status = "disabled": whether TZ resolves
+# the KeyMint app by name is still unmeasured, and a chardev that binds and
+# then blocks inside an early HAL would be worse than the clean ENOENT this
+# image has today.
+CONFIG_FLAME_QSEECOM_SHIM=y
+
 CONFIG_QCOM_SYSMON=y
 CONFIG_RPMSG_QCOM_GLINK=y
 CONFIG_RPMSG_QCOM_GLINK_SMEM=y
