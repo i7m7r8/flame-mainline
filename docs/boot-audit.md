@@ -335,9 +335,16 @@ run was started for this audit.
    (`qcom_scm_has_wrapped_key_support()`), which decides whether HWKM is even
    reachable if B-1 were ported.
 3. Whether `PARTLABEL=oops` (`config/flame.fragment:391`) is a real partition.
-   The comment there says it is assumed; the ROM's own rc names only `ramdump`,
-   `rawdump`, `spunvm`, `rescue` and `logfs`. If it is wrong, the cost is the
-   post-mortem log, not the boot.
+   The comment there says it is assumed. Everything the ROM and the stock
+   kernel do say logs somewhere else: `vendor_boot`'s cmdline carries
+   `mtdoops.fingerprint=`, the module set ships `block2mtd`, `mtd`, `mtdblock`
+   and `mtdoops`, and the only log-ish partition the rc files name is
+   `by-name/logfs` (besides `ramdump`, `rawdump`, `spunvm`, `rescue`). So the
+   stock mechanism looks like mtdoops-over-block2mtd on `logfs`, not pstore_blk
+   on `oops`. If that is right, our backend stays unregistered and we get no
+   post-mortem log at all; the fix is a one-line `PARTLABEL=` change once the
+   real partition table has been read on device. Cost of being wrong today:
+   logs, not boot.
 4. Whether the panel timings inherited for the c3f panel actually produce a
    picture - the DTS says they were inherited from sky and must be replaced
    with the vendor fragment's timings.
