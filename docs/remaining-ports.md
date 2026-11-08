@@ -42,10 +42,25 @@ implemented - the point is that the unknowns are now small and named.
    i.e. whether the TA is TZ-internal (the `KeymasterLite` strings suggest a
    built-in KM service) or must be loaded from `mfido.mdt` by a path mainline
    does not export (`LOAD_APP` with an image, `SET_MEM_PARAM`, listeners).
-2. The exact meaning of the four `APP_LOAD` fields (`w22`, `[x19+24]`, name,
-   `w21`) - derivable by reading further into `__QSEECom_get_handle` around
-   0xb3a0-0xb3d0, which is where they are filled.
-3. The `nr 3` argument layout, same method (0xb6c0-0xb744).
+2. ~~The meaning of the four `APP_LOAD` fields.~~ **Resolved** by reading
+   `__QSEECom_get_handle` at `0xb3a0-0xb3d8`. The argument is 24 bytes built on
+   the caller's stack as `{u32, u32, char __user *name, u32 name_len}`:
+   `stp w22, w8, [sp,#16]` (offsets 0 and 4, `w8 = [x19+24]`), `str x0, [sp,#24]`
+   (offset 8, the name pointer from `[x19]`), `str w21, [sp,#32]` (offset 16).
+   Just before the ioctl the library `memset`s that name buffer with
+   `w2 = w21`, so `w21` is its length and the kernel copies a
+   length-delimited name from user memory.
+3. ~~The `nr 3` argument layout.~~ **Resolved** at `0xb690-0xb744`; 32 bytes,
+   `{void *req; u32 req_len; void *rsp; u32 rsp_len}` at offsets 0, 8, 16, 24.
+   The response pointer is literally `req + req_len` (`add x9, x8, w21, uxtw`),
+   and both lengths are rounded up to 64 (`and w21, w8, #0xffffffc0`) when a
+   flag in the internal handle is 0x14 - that is the 64-byte alignment TZ
+   requires for shared buffers.
+
+So both ioctls the KeyMint path needs map cleanly onto
+`qcom_scm_qseecom_app_send(app_id, req, req_size, rsp, rsp_size)` with tzmem
+copies, and the only genuinely unknown step is whether TZ answers the app
+lookup for the KeyMint name.
 
 ### Suggested first attempt
 
