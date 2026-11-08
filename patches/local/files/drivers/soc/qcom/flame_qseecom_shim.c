@@ -202,7 +202,10 @@ static const struct file_operations flame_qsee_fops = {
 	.open		= flame_qsee_open,
 	.release	= flame_qsee_release,
 	.unlocked_ioctl	= flame_qsee_ioctl,
-	.compat_ioctl	= flame_qsee_ioctl,
+	/* No .compat_ioctl on purpose: the argument structs carry pointers, so a
+	 * 32-bit caller's layout differs and the same handler would misread it.
+	 * Every caller on this ROM (qseecomd, the KeyMint HAL) is 64-bit; a
+	 * 32-bit one gets -ENOTTY instead of silently wrong pointers. */
 };
 
 static int flame_qsee_probe(struct platform_device *pdev)
