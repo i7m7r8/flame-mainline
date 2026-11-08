@@ -70,6 +70,29 @@ So both ioctls the KeyMint path needs map cleanly onto
 copies, and the only genuinely unknown step is whether TZ answers the app
 lookup for the KeyMint name.
 
+### What is now implemented
+
+`patches/local/files/drivers/soc/qcom/flame_qseecom_shim.c` (installed by the
+manifest rules at the end of `patches/local/manifest`, selected by
+`CONFIG_FLAME_QSEECOM_SHIM=y`). It implements exactly the two ioctls above and
+`-ENOTTY` for everything else, keeps one app id behind a mutex, and routes the
+command through `qcom_tzmem` buffers.
+
+It is **inert as shipped**: the board DTS node is
+
+```
+qseecom_shim: qseecom-shim {
+	compatible = "flame,qseecom-shim";
+	status = "disabled";
+};
+```
+
+so the driver compiles and CI keeps it honest, but nothing binds and the image
+behaves exactly as before. To test it, flip that status to `"okay"`, rebuild,
+and watch the log: `app <name> -> id` on success, `app <name> lookup failed:`
+when TZ refuses. A refusal leaves `/data` exactly as stuck as it is today; a
+success is the first half of B-1.
+
 ### Suggested first attempt
 
 A DT-gated chardev implementing `nr 1` and `nr 3` only, mapping
