@@ -36,6 +36,14 @@ implemented - the point is that the unknowns are now small and named.
   and `qcom_scm_qseecom_app_send(app_id, req, req_size, rsp, rsp_size)`
   (`qcom_scm.c:2231`, `:2283`), with `CONFIG_QCOM_TZMEM=y` for the buffers.
 
+* The KeyMint app name. `libqtikeymint.so` does not call QSEECom directly: it
+  imports `keymasterutils::KeymasterUtils::qseecom_dev_init` (`R_AARCH64_JUMP_SLOT`
+  to an undefined symbol), and neither `libkeymasterutils.so` nor
+  `libkeymasterdeviceutils.so` contains a `QSEECom_start_app` call or an
+  obvious TA-name literal. The name is therefore constructed or supplied at
+  runtime, and cannot be read out of the shipped libraries - which matters,
+  because `APP_LOAD` needs it.
+
 ### What is not measured
 
 1. Whether TZ on this device answers `APP_GET_ID` for the KeyMint app name -
