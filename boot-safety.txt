@@ -14,9 +14,11 @@ ROM's vendor ramdisk, DTBO, DLKMs, and the ROM's own AVB chain.
 Why this cannot brick the device:
   - the Qualcomm loader partitions are the only thing that can be destroyed by
     a bad flash, and they are never written;
-  - our boot image has no AVB hash descriptor of its own, so vbmeta still
-    describes the ROM's boot image - if that mismatch is a problem the ROM
-    simply does not boot, and flashing stock boot.img fixes it;
+  - the ROM's own vbmeta has flags 0x3 (AVB_VBMETA_IMAGE_FLAGS_HASHTREE_DISABLED
+    | AVB_VBMETA_IMAGE_FLAGS_VERIFICATION_DISABLED, read out of stock/payload.bin
+    with the descriptor walk in docs/bootloader-audit.md), so the boot chain does
+    not hash boot at all; our unsigned image is not a mismatch, and even if it
+    were, flashing stock boot.img fixes it;
   - the payload never writes to flash. If the shim ever gets confused it halts
     in a `b .` loop with interrupts on, which is recoverable by holding
     Power+VolDown until fastboot comes back.
