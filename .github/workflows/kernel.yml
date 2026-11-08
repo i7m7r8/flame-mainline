@@ -95,6 +95,15 @@ jobs:
           PATCHDIR="$GITHUB_WORKSPACE/rocknix/projects/ROCKNIX/devices/SM4450/patches/linux"
           echo "PATCHDIR=$PATCHDIR" >> "$GITHUB_ENV"
           ls "$PATCHDIR" | wc -l
+          # The ref is a moving branch by default, so two builds of the same
+          # commit can differ - which they did: 88b157c and 50045bf produced
+          # Images with 9.4M differing bytes while config and dtb stayed
+          # byte-identical. Stamp what was actually used so the artifact says
+          # what it was built from.
+          git -C rocknix rev-parse HEAD > "$GITHUB_WORKSPACE/rocknix-ref.txt"
+          git -C rocknix log -1 --format='%H %ad %s' --date=short \
+            >> "$GITHUB_WORKSPACE/rocknix-ref.txt"
+          cat "$GITHUB_WORKSPACE/rocknix-ref.txt"
 
       - name: Apply patch series
         run: |
@@ -102,7 +111,10 @@ jobs:
           cd "$SRC"
           mkdir -p "$GITHUB_WORKSPACE/out"
           rep="$GITHUB_WORKSPACE/out/patch-report.txt"
-          : > "$rep"
+          {
+            echo "# rocknix ref: $ROCKNIX_REF"
+            cat "$GITHUB_WORKSPACE/rocknix-ref.txt" 2>/dev/null || true
+          } > "$rep"
           applied=0
           already=0
           rejected=0
