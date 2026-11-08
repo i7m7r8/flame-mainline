@@ -89,32 +89,29 @@ this port does not have.
 
 ## Every module, fingerprinted
 
-All 288 `.ko` in the vendor ramdisk (and the 70 that only exist in
-`vendor_dlkm`) went through `craft-anything-cli` triage and string extraction,
-and their undefined-symbol lists were bucketed by subsystem. Of the 288:
+All 288 `.ko` in the vendor ramdisk plus the 70 that only exist in
+`vendor_dlkm` - 358 in total, no duplicates left out - went through
+`craft-anything-cli` triage and string extraction, and their undefined-symbol
+lists were bucketed by subsystem. Of the 358 (a module can appear in more than
+one row):
 
-| imports | modules |
+| imports | modules (of 358) |
 | --- | --- |
-| clock framework | 53 |
-| DMA engine | 42 |
-| regmap | 38 |
-| regulator | 30 |
-| `qcom_scm` | 29 |
-| thermal | 21 |
-| GENI/interconnect | 20 |
-| pinctrl/gpio | 19 |
+| clock framework | 69 |
+| regmap | 51 |
+| `qcom_scm` | 35 |
+| `request_firmware` | 21 |
 | USB gadget | 14 |
-| smp2p/smem | 14 |
-| glink/rpmsg | 12 |
-| `request_firmware` | 12 |
-| iommu | 7 |
-| rpmh | 7 |
-| remoteproc | 6 |
-| ufs | 5 |
-| spmi | 5 |
+| iommu | 13 |
+| remoteproc | 8 |
+
+The first pass over the 288 ramdisk modules, before the `vendor_dlkm` set was
+added, read: clock 53, DMA 42, regmap 38, regulator 30, `qcom_scm` 29,
+thermal 21, GENI/interconnect 20, pinctrl 19, USB 14, smp2p/smem 14,
+glink/rpmsg 12, firmware 12, iommu 7, rpmh 7, remoteproc 6, ufs 5, spmi 5.
 
 The point of the bucket counts is not the numbers, it is that **none of these
-288 can be loaded** (`CONFIG_MODULES=n`), so any interface that only one of
+358 can be loaded** (`CONFIG_MODULES=n`), so any interface that only one of
 them provides is absent from this image unless an in-tree driver covers it -
 which is exactly the DEGRADED table below.
 
