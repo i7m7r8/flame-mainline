@@ -210,6 +210,28 @@ int main(void)
 	uname(&u);
 	printf("  %s %s (%s)\n", u.sysname, u.release, u.machine);
 
+	/* The bootconfig test: a key that reached /proc/cmdline can only have
+	 * come from the blob ABL appends, because -append never carries it. */
+	printf("===== P1a cmdline =====\n");
+	if (!(f = fopen("/proc/cmdline", "r"))) {
+		printf("  (no /proc/cmdline: %s)\n", strerror(errno));
+	} else {
+		char line[1024];
+		if (fgets(line, sizeof(line), f))
+			printf("  %s", line);
+		fclose(f);
+	}
+	printf("===== P1b /proc/bootconfig =====\n");
+	if (!(f = fopen("/proc/bootconfig", "r"))) {
+		printf("  (no /proc/bootconfig: %s)\n", strerror(errno));
+	} else {
+		char line[256];
+		int n = 0;
+		while (fgets(line, sizeof(line), f) && n++ < 8)
+			printf("  %s", line);
+		fclose(f);
+	}
+
 	printf("===== P2 /sys/devices/platform entries =====\n");
 	printf("  (root=/sys/devices/platform)\n");
 	d = opendir("/sys/devices/platform");

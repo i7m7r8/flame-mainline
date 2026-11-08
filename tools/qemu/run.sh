@@ -54,7 +54,7 @@ boot() { # boot <dtb-tag> <append> <logfile>
 	# needs its own timeout or the harness waits forever on a dead kernel.
 	timeout ${QEMU_TIMEOUT:-60} qemu-system-aarch64 -M virt,gic-version=2 -cpu max -smp 2 -m 320 \
 		-display none -no-reboot -nic none -serial file:"$3" \
-		-kernel "$IMAGE" -dtb "$WORK/harness-$1.dtb" -initrd "$INITRD" \
+		-kernel "$IMAGE" -dtb "$WORK/harness-$1.dtb" -initrd "${BOOT_INITRD:-$INITRD}" \
 		-drive file="$GPT",if=none,format=raw,id=gpt \
 		-device virtio-blk-device,drive=gpt \
 		-append "console=ttyAMA0 loglevel=7 $2" >/dev/null 2>&1 || true
@@ -79,5 +79,35 @@ matrix)
 		printf '%-46s %s\n' "$tag + $dev" "$v"
 	done
 	;;
-*)	echo "usage: $0 [probe|matrix]"; exit 2;;
+bootconfig)
+	# Prove the kernel parses the blob ABL appends, by putting every
+	# androidboot.* key the first stage needs into the blob and *nothing*
+	# onto -append. If CONFIG_BOOT_CONFIG(/_FORCE) is missing the kernel
+	# silently ignores it and first stage loses slot_suffix; the mount
+	# verdict below is what distinguishes the two.
+	python3 "$HERE/mkbootconfig.py" -o "$WORK/bc.bin" \
+		androidboot.hardware=qcom androidboot.slot_suffix=_a \
+		androidboot.fstab_suffix=default \
+		androidboot.boot_devices=soc/a003e00.virtio_mmio
+	cat "$INITRD" "$WORK/bc.bin" > "$WORK/initrd-bc.cpio"
+
+	printf '%-46s %s\n' "bootconfig transport" "verdict"
+	BOOT_INITRD=$WORK/initrd-bc.cpio boot soc "rdinit=/diaginit" "$WORK/bc-probe.log"
+	if grep -q "bootconfig checksum failed" "$WORK/bc-probe.log"; then v="FAILS - checksum rejected"
+	elif grep -q "No bootconfig data provided" "$WORK/bc-probe.log"; then v="FAILS - kernel never saw the blob"
+	elif grep -q "androidboot.slot_suffix = \"_a\"" "$WORK/bc-probe.log"; then
+		v="PARSED (slot_suffix in /proc/bootconfig)"
+	elif grep -q "Load bootconfig:" "$WORK/bc-probe.log"; then
+		v="PARSED (kernel log only; /proc/bootconfig unreadable)"
+	else v="see $WORK/bc-probe.log"; fi
+	printf '%-46s %s\n' "initrd + #BOOTCONFIG blob -> cmdline" "$v"
+	sed -n '/P1b /,/P2 /p' "$WORK/bc-probe.log" | grep -vE '^\[' | head -6
+
+	BOOT_INITRD=$WORK/initrd-bc.cpio boot soc "" "$WORK/bc-init.log"
+	if grep -q "check_fs(): mount(/dev/block/by-name" "$WORK/bc-init.log"; then v2="MOUNTS (first stage done)"
+	elif grep -q "Failed to mount required partitions" "$WORK/bc-init.log"; then v2="FAILS - no by-name symlinks"
+	else v2="see $WORK/bc-init.log"; fi
+	printf '%-46s %s\n' "ROM /init, props only from bootconfig" "$v2"
+	;;
+*)	echo "usage: $0 [probe|matrix|bootconfig]"; exit 2;;
 esac
