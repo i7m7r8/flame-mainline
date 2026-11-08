@@ -205,6 +205,32 @@ unbound - is not decided by anything in this image. **UNKNOWN**, and it is
 cheap to measure on device: `getprop persist.vendor.usb.config` and
 `cat /sys/class/udc/*/state`.
 
+### Device tree gap check against the vendor's own base DTB
+
+`vendor_boot.dtb_size` is not the offset of a blob in the image (the headers'
+`dtb_addr` is a load address), but the FDTs are findable by magic: the first one
+at `0xf64000` is `"Qualcomm Technologies, Inc. Parrot 4Gb SoC"`, 334 852 B, and
+it decompiles to 15 773 lines. It carries **235** `compatible` strings; the
+board file carries **145**, and 203 of the vendor's are absent from it.
+
+That number overstates the gap, because vendor and mainline spell the same
+device differently (`qcom,i2c-geni` vs `qcom,geni-i2c`) and because most of the
+list is deliberately out of scope. What was checked by hand:
+
+*Present in the board file*: `geni-i2c`, `geni-spi`, `cpufreq`,
+`qcom,qfprom-sys`-equivalent nvmem, `smem`, `smmu` (18 references), `rsc`,
+`sde`, the DWC3 glue plus a real HS phy (`qcom,usb-snps-hs-7nm-phy`) and the
+QMP combo phy, and 15 `power-domains` references into RPMh (`MX`, `CX`, `LCX`,
+`LMX`), which is the mainline stand-in for the vendor's `qcom,gdsc`.
+*Absent, and vendor-only*: `qcom,qseecom`, `qcom,smcinvoke`, `qcom,mem-buf`,
+`qcom,sde-kms`, `qcom,msm-vidc*`, `qcom,adreno-gpu-*`(kgsl), the whole
+`qcom,lpass-cdc` / `qcom,msm-pcm-*` audio set, `qcom,gh-*` (Gunyah),
+`qcom,tz-log`, `qcom,minidump`, `qcom,mem-dump`, `qcom,memshare`,
+`qcom,qcedev`, `qcom,secure-buffer`, `qcom,smmu_sde_*`.
+*Absent, mainline-supported, harmless without*: `qcom,bam-v1.7.0` and
+`qcom,gpi-dma` (GENI falls back to FIFO), `qcom,epss` (the board file's
+cpufreq node is the one that binds), `qcom,smp2p-sleepstate`.
+
 ## Cleared - things that looked like blockers and are measurably not
 
 These are recorded because each one was a credible way to fail at first stage,
