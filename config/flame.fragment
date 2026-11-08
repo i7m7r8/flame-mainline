@@ -451,6 +451,26 @@ CONFIG_DEFAULT_HUNG_TASK_TIMEOUT=120
 CONFIG_ARM64_HANDOVER_CMDLINE=y
 CONFIG_BLK_DEV_INITRD=y
 
+# The stock 6.6.118 kernel this ROM ships (config read out of its own vmlinux,
+# see docs/bootloader-audit.md) builds with CONFIG_BOOT_CONFIG=y and with the
+# literal token "bootconfig" inside CONFIG_CMDLINE, which is how the GKI tree
+# makes the kernel look for the boot config blob ABL appends after the initrd.
+# We had neither, and the consequence is not cosmetic: init/main.c:437 parses
+# that blob only when bootconfig_found (a "bootconfig" token on the command
+# line, init/main.c:404-411) or CONFIG_BOOT_CONFIG_FORCE is set, and
+# lib/Makefile:267 only builds bootconfig.o under CONFIG_BOOT_CONFIG. Without
+# it /proc/cmdline loses every androidboot.* key ABL passes that way - the
+# first of which, androidboot.slot_suffix, is what resolves the slotselect
+# flags in the ROM's fstab, i.e. which of the two vendor/system/product
+# partitions first stage mounts.
+#
+# FORCE rather than the token: with FORCE and no blob present the kernel says
+# "No bootconfig data provided, so skipping bootconfig" at info level, while a
+# token with no blob prints at error level, and this image is supposed to boot
+# without errors.
+CONFIG_BOOT_CONFIG=y
+CONFIG_BOOT_CONFIG_FORCE=y
+
 # ---- boot-critical symbols audited against stock/gki.config
 # Everything below is =y in the vendor 6.6.82 config this ROM boots with today and
 # was absent here.  The list was produced by name-diffing the two configs and then
