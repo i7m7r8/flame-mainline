@@ -172,6 +172,27 @@ layer", and the vendor blobs point the way: `qseecom_dlkm.ko` imports exactly
 `qcom_scm_qseecom_call`, while `smcinvoke_dlkm.ko` imports raw
 `qcom_scm_invoke_smc{,_legacy}` and would need the harder path.
 
+**The ABI userspace actually issues.** Disassembling this ROM's
+`libQSEEComAPI.so` and collecting every `ioctl(fd, cmd, arg)` site gives the
+full command set as numbers (type `0x97`, direction `_IOWR` except the
+argument-less ones):
+
+```
+0xc0189701 size=24    0x00009702 size=0     0xc0209703 size=32   0xc0409704 size=64
+0x00009705 size=0     0x00009706 size=0     0xc0549707 size=84   0xc0189708 size=24
+0x00009709 size=0     0xc004970a size=4     0x0000970e size=0    0xc048970f size=72
+0xc0289710 size=40    0xc0249711 size=36    0xc0089712 size=8    0xc0309715 size=48
+0xc0449718 size=68
+```
+
+`0xc0209703` (nr 3, 32-byte argument) is the one on `QSEECom_send_cmd`'s
+`ioctl` path; `qseecom_dlkm.ko`'s dispatcher compares its command word against
+`0xc0309715` and `0xc0309724` before anything else, which is consistent with
+the same encoding (`_IOWR(0x97, nr, size)`). That table is the contract a
+mainline `/dev/qseecom` has to implement - and it is small. The names for the
+numbers live in the vendor header, not in the binary, so they are listed as
+numbers rather than guessed.
+
 Cost, measured off the blobs: `qseecom_dlkm.ko` is 334 312 B with 1 566
 code ranges in the lifter's function list (83 named functions in the symbol
 table, 109 kernel imports); `smcinvoke_dlkm.ko` is 284 656 B with 1 102 ranges
