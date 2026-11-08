@@ -177,7 +177,35 @@ corpus (288 + 70 blobs scanned).
 | `/proc/sys/kernel/sched_lib_{name,mask_check,mask_force}` | vendor scheduler (`libqti-perfd.so` writes them) | absent - perf HAL degraded |
 | `/sys/devices/virtual/graphics/fb0/idle_time` | vendor fbdev | `fb0` exists via DRM fbdev emulation; the attribute is vendor-only |
 
-### Cleared - things that looked like blockers and are measurably not
+#### Userspace to kernel contract, read off the vendor binaries
+
+Every one of these is a string in a binary that runs before or alongside
+`system_server` (extracted from `vendor.img` with `debugfs`, scanned with
+`craft-anything-cli native-strings-find`):
+
+| vendor binary | kernel object | our kernel |
+| --- | --- | --- |
+| `qseecomd` | `/dev/qseecom` | absent - B-1 |
+| `libqtikeymint.so` | `/dev/qseecom` | absent - B-1 |
+| `libQSEEComAPI.so` | `/dev/qseecom` | absent - B-1 |
+| `libgralloccore.so` | `/dev/qti-smmu-proxy` | absent - B-2 |
+| `dspservice` | `/dev/fastrpc-cdsp` | absent (no CDSP node) |
+| `adsprpcd` | via `libadsprpc.so`: `/dev/fastrpc-adsp` | present (`CONFIG_QCOM_FASTRPC=y`) |
+| `libqti-perfd.so` | `/dev/cpuset/*/boost`, `/proc/sys/kernel/sched_lib_*` | partly: cpusets exist, `boost` and `sched_lib_*` are vendor-only |
+| `mi_thermald` | `/sys/class/thermal/*`, `/sys/class/thermal/thermal_message/*`, `/sys/class/qcom-battery/*`, `/sys/class/backlight/panel0-backlight/brightness` | `thermal` yes; the `thermal_message`, `qcom-battery` and `panel0-backlight` classes are vendor-only, so charging mitigation degrades |
+| `libthermalclient.so`, `lowi-server` | sockets only (`/dev/socket/...`) | n/a - no kernel interface |
+| `android.hardware.usb.gadget-service.qti` | `/config/usb_gadget/g1/{UDC,functions/*}`, `/dev/usb-ffs/{adb,mtp,ptp}/ep*`, `/sys/class/udc/` | `ffs` and `UDC` are there (F-1); `mtp`/`ptp` functions are not (`F_MTP`/`F_PTP` unset), and the ROM's own composition script prefers `diag`/`qdss`/`serial_cdev` functions that only vendor modules provide |
+
+That last row is the one place where our debug channel is at risk for a reason
+that is not a port: `init.qcom.usb.sh:57-133` sets `persist.vendor.usb.config`
+to compositions that include `diag`, and `usb_f_diag` has no mainline
+equivalent. The HAL surfaces *"Usb Gadget setcurrent functions failed"*, and
+what Android does after that - retry with a smaller composition, or leave USB
+unbound - is not decided by anything in this image. **UNKNOWN**, and it is
+cheap to measure on device: `getprop persist.vendor.usb.config` and
+`cat /sys/class/udc/*/state`.
+
+## Cleared - things that looked like blockers and are measurably not
 
 These are recorded because each one was a credible way to fail at first stage,
 and the answer is worth not re-deriving.
