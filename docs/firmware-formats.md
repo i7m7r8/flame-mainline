@@ -60,6 +60,33 @@ an ELF/PE, `readelf`/`objdump` for the relocation and section layers inside
 them, and a purpose-written decoder for the containers - a container is not
 "empty" because a program-code tool cannot see inside it.
 
+## Architecture of each image, and how far the lifter gets
+
+Asked of every ELF image with `core-target-triage` and
+`native-functions-list`; the errors are the tool's own words.
+
+| image | what runs it | lifter result |
+| --- | --- | --- |
+| `tz.mbn` | Cortex-A (EL3 secure world) | 5 000+ code ranges (limit hit) |
+| `hyp.mbn` | Cortex-A EL2 | 1 586 ranges |
+| `xbl_ramdump.img` | Cortex-A | 2 316 ranges |
+| `rtice.mbn` | Cortex-A64 | 635 ranges |
+| `uefisecapp.img` | Cortex-A64 (UEFI app) | 423 ranges |
+| `vmlinux-selfbuild` | Cortex-A64 | 5 000+ ranges (limit hit) |
+| `uefi.elf` | Cortex-A64 UEFI | 11 ranges, body encrypted above 0x50000 |
+| `abl.img`, `aop.img` | Cortex-A32 | 1 range each; body encrypted (entropy 8.00 / 6.90) |
+| `cpucp.img`, `shrm.img` | **RISC-V 32** | `riscv32 code isn't supported by the built-in decoder yet` |
+| `qupfw.img`, `qupv3fw.elf` | **Hexagon** | `hexagon code isn't supported by the built-in decoder yet` |
+| `xbl.img`, `xbl_config.img` | MBN-wrapped | `unknown code isn't supported by the built-in decoder yet` |
+| `devcfg.img`/`.mbn`, `imagefv.img`, `aop_config.img` | Cortex-A32 | 0 ranges (no section headers, decoder declines) |
+
+Two of those are worth keeping: the QuP firmware really is Hexagon code and
+CPUCP/SHRM really are RISC-V - the tool identifies both and stops, which is
+more useful than a silent zero. And on `tz.img` the same tool reports 0 string
+matches for `qsee` while `strings` finds 618, so its string search is only as
+good as its container support: for section-less Qualcomm images it is not a
+reader at all.
+
 ## The three formats that actually gate the boot
 
 1. **Android boot v4** - the bootloader reads `ANDROID!`, `header_version`,
