@@ -330,6 +330,20 @@ and the answer is worth not re-deriving.
   `_FALLBACK` `=y`; the DT wires `qcom,ice = <&ice_ufs_mem>` and the bootargs
   already carry `qcom_ice.use_wrapped_keys=1`, which `ice.c:179-186` requires
   before it will use HWKM at all.
+* **Every device node has a driver, and the generic compatibles are the ones
+  that bind.** 169 nodes in the shipped dtb carry a `compatible`; checking each
+  node's list against every quoted string in the kernel tree leaves only the
+  ARM architectural ones (cpus, pmu, psci, gic, timers - matched by name, not
+  by `of_match_table`) and one SPI child. The three that matter most bind
+  through their *second* compatible: `qcom,ufshc` (`ufs-qcom.c:2995`),
+  `qcom,inline-crypto-engine` (`ice.c:773`), `qcom,snps-dwc3`
+  (`dwc3-qcom.c:842`) - mainline 7.1.2 has no `sm4450` entries for those, which
+  is fine because the DT lists the generic one after the SoC-specific one. DSI
+  is selected by hardware version, not compatible (`dsi_cfg.c` table has
+  `MSM_DSI_6G_VER_MINOR_V2_6_0`, the version this panel controller straps), and
+  the built `Image` really contains the code: `grep` finds `qcom,ufshc`,
+  `qcom,inline-crypto-engine`, `qcom,snps-dwc3`, `qcom,geni-uart`,
+  `qcom,sm4450-mdss`, `qcom,sm4450-dpu` and 51 `sm4450` strings in it.
 * **Reserved memory.** `vendor_boot` carries **eleven** base DTBs on this
   device (Parrot, ParrotP, Ravelin, RavelinP, each in 4Gb/SG/plain). Our
   `reserved-memory` was diffed against all of them by address, and against
