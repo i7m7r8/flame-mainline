@@ -241,6 +241,39 @@ encrypted blob and cannot be read. This is the single thing in the boot chain
 that a static audit cannot clear, and the way to clear it is one boot attempt,
 not another decode.
 
+## The packed payload, verified at the byte level
+
+`boot.img`'s kernel section is not the Image - it is `payload.bin`, and the
+check that matters is whether the bootloader's jump into it lands somewhere
+valid. It does, and the whole chain was re-derived here:
+
+```
+payload.bin 0x00000000  4d 5a 40 fa  -> code0 = 0xfa405a4d = EFI_SIG_NOP ("MZ")
+payload.bin 0x00000004  ff 33 44 15  -> code1 = 0x154433ff = b 0x510d000
+                                       (imm26 0x14433ff; 4 + 4*imm = shim_off)
+```
+
+so the loader's jump to the Image start executes the PE "MZ" nop and falls
+into the branch to the shim at `0x510d000`. Disassembling the 788 bytes there
+confirms what it does before it can fail: `mov x4,#0x17410000; str w5,[x4,#4];
+str wzr,[x4,#8]` stops the bootloader watchdog, it reads its header from
+`shim_off-0x1000`, checks the `SWEETLNX` magic and version 2, bounds-checks
+`image_off`/`dtb_off` against 0x20000000/0x1000000, copies the bootloader's
+tree into the handover region, and jumps to `entry_off` with `x0 = dtb_load`.
+
+Rebuilding the payload locally from the artifact's own `Image` and dtb with
+`tools/mklinuxpayload.py` (and the shim assembled by `aarch64-linux-gnu-as`)
+produces a **byte-identical** file:
+
+```
+af68b5aeeb6c623191e14327f17514408f08db93e8c77a3e72d42fcb18542ac9  payload.bin (artifact)
+af68b5aeeb6c623191e14327f17514408f08db93e8c77a3e72d42fcb18542ac9  payload.bin (local rebuild)
+```
+
+which is the strongest statement available without the phone: the bytes the
+boot chain will execute are exactly the bytes this repository's tools produce,
+and their entry path is not a guess.
+
 ## Two ABLs, both encrypted
 
 The question "is the fastboot ROM's loader any more readable than the OTA's?"
