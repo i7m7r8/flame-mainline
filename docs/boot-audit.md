@@ -203,6 +203,16 @@ either blob (`qseecom_dlkm.ko` has no `/vendor/firmware`, no `.mbn`;
 TAs are handed in by `qseecomd` and the gap is entirely kernel-side.
 `CONFIG_MODULES=n` means there is no `.ko` channel to hide in.
 
+**B-1 status as of 2026-11-08.** The ioctl layer now exists in the tree -
+`patches/local/files/drivers/soc/qcom/flame_qseecom_shim.c`, selected by
+`CONFIG_FLAME_QSEECOM_SHIM=y`, wired through the manifest, and compiled by CI
+in every build. It is deliberately **unbound**: the board DTS node is
+`status = "disabled"`, because whether TZ answers the app lookup for the
+KeyMint name is still unmeasured, and a chardev that binds and then blocks in
+an early HAL is worse than the clean `ENOENT` this image gives today. See
+`docs/remaining-ports.md` for how to enable it for a test build and what to
+look for in the log.
+
 **B-2 (BOOT-BLOCKER for the UI, open) - the graphics ABI.** Measured:
 `libgralloccore.so` opens **`/dev/qti-smmu-proxy`**, which only
 `smmu_proxy_dlkm.ko` provides. Not measured: `libsdedrm.so` (the composer
